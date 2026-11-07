@@ -35,6 +35,11 @@ _DEFAULT_THRESHOLD_MS = 100.0
 _THRESHOLD_ENV = "OCTOP_LOOP_LAG_MS"
 
 _expected: float | None = None
+# ``_expected`` is measured on a specific loop's clock, so a fresh loop cannot
+# inherit it: without this the watchdog would decide it is already running and
+# silently stop sampling, and the counters would read zero forever — the most
+# misleading possible report.
+_watchdog_loop: asyncio.AbstractEventLoop | None = None
 _in_flight: dict[int, _InFlight] = {}
 _counter = 0
 # Requests interleave at every ``await``, so the token has to travel with the
@@ -122,14 +127,15 @@ def _report(drift_ms: float) -> None:
 
 
 def _ensure_watchdog() -> None:
-    """Start sampling once a loop exists; safe to call on every request."""
-    global _expected
-    if _expected is not None:
-        return
+    """Start sampling on the running loop; safe to call on every request."""
+    global _expected, _watchdog_loop
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:  # pragma: no cover - install() outside a loop
         return
+    if _watchdog_loop is loop and _expected is not None:
+        return
+    _watchdog_loop = loop
     _expected = loop.time() + _INTERVAL_S
     loop.call_later(_INTERVAL_S, _tick, loop)
 
@@ -144,6 +150,7 @@ def _tick(loop: asyncio.AbstractEventLoop) -> None:
 
 def stop_watchdog() -> None:
     """Stop rescheduling; the loop drops the pending timer when it closes."""
-    global _expected
+    global _expected, _watchdog_loop
     _expected = None
+    _watchdog_loop = None
     _in_flight.clear()

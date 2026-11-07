@@ -117,6 +117,30 @@ def test_the_watchdog_reschedules_itself() -> None:
     asyncio.run(scenario())
 
 
+def test_a_new_loop_restarts_the_watchdog() -> None:
+    """A re-created loop must not inherit the previous loop's deadline.
+
+    ``_expected`` is expressed on one loop's clock. Treating it as still valid
+    would stop sampling for good and leave the counters at zero — which reads
+    exactly like a healthy server, the worst possible failure mode here.
+    """
+
+    async def first() -> None:
+        loop_lag._ensure_watchdog()
+        assert loop_lag._expected is not None
+
+    async def second() -> None:
+        loop_lag._ensure_watchdog()
+        current = asyncio.get_running_loop()
+        deadline = loop_lag._expected
+        assert loop_lag._watchdog_loop is current
+        assert deadline is not None
+        assert deadline > current.time()
+
+    asyncio.run(first())
+    asyncio.run(second())
+
+
 def test_threshold_can_be_tuned_at_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOP_LOOP_LAG_MS", "50")
 
