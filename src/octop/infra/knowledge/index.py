@@ -114,12 +114,14 @@ class KnowledgeIndex:
         query_norm = math.sqrt(sum(value * value for value in query))
         if query_norm == 0:
             raise ValueError("query vector cannot be zero")
+
+        # Pass 1 — read embeddings only. Text and metadata stay on disk until we
+        # know the winners; they dominate row size and need a JSON decode each.
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT chunk_id, doc_id, ordinal, text, embedding, meta_json FROM chunks"
-            ).fetchall()
-        hits: list[Hit] = []
-        for chunk_id, doc_id, ordinal, text, blob, meta_json in rows:
+            rows = conn.execute("SELECT chunk_id, doc_id, embedding FROM chunks").fetchall()
+
+        scored: list[tuple[float, str, str]] = []
+        for chunk_id, doc_id, blob in rows:
             embedding = struct.unpack(f"<{len(blob) // 4}f", blob)
             if len(embedding) != len(query):
                 continue
@@ -129,6 +131,29 @@ class KnowledgeIndex:
                 if norm == 0
                 else sum(a * b for a, b in zip(query, embedding, strict=True)) / (query_norm * norm)
             )
+            scored.append((score, chunk_id, doc_id))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        winners = scored[:k]
+        if not winners:
+            return []
+
+        # Pass 2 — hydrate only the winners, then rebuild them in ranked order.
+        placeholders = ",".join("?" * len(winners))
+        with self._connect() as conn:
+            detail_rows = conn.execute(
+                "SELECT chunk_id, ordinal, text, meta_json FROM chunks "
+                f"WHERE chunk_id IN ({placeholders})",
+                [chunk_id for _, chunk_id, _ in winners],
+            ).fetchall()
+        details = {row[0]: row for row in detail_rows}
+
+        hits: list[Hit] = []
+        for score, chunk_id, doc_id in winners:
+            row = details.get(chunk_id)
+            if row is None:
+                continue
+            _, ordinal, text, meta_json = row
             decoded = json.loads(meta_json)
             hits.append(
                 Hit(
@@ -140,4 +165,4 @@ class KnowledgeIndex:
                     metadata=decoded if isinstance(decoded, dict) else {},
                 )
             )
-        return sorted(hits, key=lambda hit: hit.score, reverse=True)[:k]
+        return hits
