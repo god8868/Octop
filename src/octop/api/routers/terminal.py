@@ -71,6 +71,7 @@ from octop.api.deps import get_server, require_permission, resolve_user_from_tok
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.permissions import user_has_permission
 from octop.infra.utils import posix_compat
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -409,8 +410,12 @@ async def _destroy_session(session: _PtySession, *, cancel_pump: bool) -> None:
     # Kill the whole process group off-thread so we never block the loop.
     proc = session.proc
     if proc.poll() is None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _terminate_process_group, proc)
+        await run_blocking(
+            _terminate_process_group,
+            proc,
+            pool=Pool.IO,
+            label="terminate_process_group",
+        )
 
     logger.info(
         "terminal session ended: agent=%s sid=%s active=%d",

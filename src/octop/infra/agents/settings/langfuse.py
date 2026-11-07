@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -15,6 +14,7 @@ from octop.infra.crypto.fernet import PURPOSE_SETTINGS, open_secret_bytes, seal_
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.settings import SettingsRepo
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +150,14 @@ class LangfuseSettingsStore:
         if not pk or not h or not sk:
             raise OctopError(ErrorCode.SLASH_BAD_ARGS, "Langfuse credentials are incomplete")
 
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, verify_langfuse_credentials, h, pk, sk)
+        return await run_blocking(
+            verify_langfuse_credentials,
+            h,
+            pk,
+            sk,
+            pool=Pool.IO,
+            label="verify_langfuse_credentials",
+        )
 
     def harness_config(self) -> Any:
         """Build octop-harness ``LangfuseConfig`` for ``HarnessAgentManager``."""

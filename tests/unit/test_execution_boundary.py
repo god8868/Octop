@@ -9,7 +9,8 @@ The allowlist in :data:`_DEFAULT_EXECUTOR_BASELINE` is a burn-down list: every
 entry is a place that still uses the shared default executor instead of
 :func:`octop.infra.utils.offload.run_blocking`. It may only shrink. Converting a
 call site means deleting its entry — a stale entry fails the test, so the list
-cannot drift out of date the way a comment would.
+cannot drift out of date the way a comment would. It is empty now, which is the
+point: adding an entry back is how this guard would quietly stop working.
 """
 
 from __future__ import annotations
@@ -46,18 +47,9 @@ _FORBIDDEN_IN_ASYNC = frozenset(
 )
 
 #: ``run_in_executor(None, ...)`` still present, keyed by file then function.
-#: 11 call sites across 9 files when this guard was written. Only shrinks.
-_DEFAULT_EXECUTOR_BASELINE: dict[str, dict[str, int]] = {
-    "src/octop/api/routers/desktop/settings.py": {"set_desktop_geometry": 1},
-    "src/octop/api/routers/terminal.py": {"_destroy_session": 1},
-    "src/octop/infra/agents/memory/slim.py": {"_run_postgres": 1, "inspect_storage": 1},
-    "src/octop/infra/agents/settings/langfuse.py": {"test_connection": 1},
-    "src/octop/infra/connectors/gateway/agently_auth.py": {"_spawn": 1},
-    "src/octop/infra/connectors/gateway/agently_watch.py": {"_listen": 2},
-    "src/octop/infra/knowledge/jobs.py": {"_run": 1},
-    "src/octop/infra/knowledge/retrieve.py": {"retrieve_context": 1},
-    "src/octop/infra/server.py": {"_boot_runtime": 1},
-}
+#: Empty since the last call site was converted — the rule is now a plain ban.
+#: Keep it empty: adding an entry is how this guard silently dies.
+_DEFAULT_EXECUTOR_BASELINE: dict[str, dict[str, int]] = {}
 
 
 @dataclass(frozen=True, order=True)

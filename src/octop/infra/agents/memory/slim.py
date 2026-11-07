@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from octop.i18n import tr
 from octop.infra.errors import OctopError
+from octop.infra.utils.offload import Pool, run_blocking
 
 if TYPE_CHECKING:
     from octop.infra.agents.manager import AgentManager
@@ -76,14 +77,16 @@ class MemorySlimCoordinator:
         return memory, None
 
     async def inspect_storage(self, agent_id: str, *, locale: str = "en") -> dict[str, Any]:
-        from functools import partial
-
         from octop.infra.agents.memory.storage import inspect_storage
 
         self._check_ready(locale)
         memory, blocked_reason = self._storage_target(agent_id, locale)
-        return await asyncio.get_running_loop().run_in_executor(
-            None, partial(inspect_storage, memory, blocked_reason=blocked_reason)
+        return await run_blocking(
+            inspect_storage,
+            memory,
+            blocked_reason=blocked_reason,
+            pool=Pool.IO,
+            label="inspect_memory_storage",
         )
 
     def start_current(self, agent_id: str, owner_id: int, *, locale: str = "en") -> dict[str, Any]:
@@ -512,7 +515,6 @@ class MemorySlimCoordinator:
                 registry.end_history_backfill(agent_id)
 
     async def _run_postgres(self, memory: Any, locale: str) -> None:
-        from functools import partial
 
         from octop.infra.agents.memory.postgres_storage import maintain_postgres_storage
 
@@ -527,15 +529,18 @@ class MemorySlimCoordinator:
         def progress(values: dict[str, Any]) -> None:
             loop.call_soon_threadsafe(self._update, values)
 
-        worker = loop.run_in_executor(
-            None,
-            partial(
+        # Maintenance scans the whole namespace, so it goes on the pool reserved
+        # for minutes-scale work rather than competing with IO.
+        worker = asyncio.ensure_future(
+            run_blocking(
                 maintain_postgres_storage,
                 memory.backend,
                 backup=backup,
                 progress=progress,
                 locale=locale,
-            ),
+                pool=Pool.SUBPROCESS,
+                label="maintain_postgres_storage",
+            )
         )
         try:
             report = await asyncio.shield(worker)

@@ -20,6 +20,7 @@ from octop.i18n import tr
 from octop.infra.connectors.gateway.adapters import agently_cli, dingtalk_cli
 from octop.infra.connectors.gateway.cli_dirs import resolve_cli_config_key
 from octop.infra.connectors.gateway.cli_runner import resolve_binary
+from octop.infra.utils.offload import Pool, run_blocking
 from octop.infra.utils.paths import PathLayout
 from octop.infra.utils.posix_compat import killpg, sigkill
 
@@ -145,8 +146,8 @@ def _prepare(spec: _Spec, creds: dict[str, Any]) -> tuple[str, dict[str, str]]:
 async def _spawn(
     spec: _Spec, creds: dict[str, Any], args: tuple[str, ...]
 ) -> asyncio.subprocess.Process:
-    binary, env = await asyncio.get_running_loop().run_in_executor(
-        None, partial(_prepare, spec, creds)
+    binary, env = await run_blocking(
+        _prepare, spec, creds, pool=Pool.IO, label="agently_prepare_spawn"
     )
     return await asyncio.create_subprocess_exec(
         binary,

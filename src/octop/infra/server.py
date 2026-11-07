@@ -36,6 +36,7 @@ from octop.infra.proactive.service import ProactiveCareService
 from octop.infra.setup import password_file as _wizard_pw
 from octop.infra.setup.wizard_tokens import WizardTokenStore
 from octop.infra.users.manager import UserManager
+from octop.infra.utils.offload import Pool, run_blocking
 from octop.infra.utils.paths import PathLayout
 from octop.infra.utils.process_resources import ensure_nofile_limit
 
@@ -492,8 +493,11 @@ class OctopServer:
         assert self.expert_catalog is not None
         assert self.plugin_manager is not None
 
-        added = await asyncio.get_running_loop().run_in_executor(
-            None, sync_provider_preset_models, self.services.provider_repo
+        added = await run_blocking(
+            sync_provider_preset_models,
+            self.services.provider_repo,
+            pool=Pool.IO,
+            label="sync_provider_preset_models",
         )
         if added:
             logger.info("Added %d newly bundled provider models", added)

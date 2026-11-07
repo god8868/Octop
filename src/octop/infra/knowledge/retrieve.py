@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Any
@@ -13,6 +12,7 @@ from octop.infra.knowledge.embed import embed_knowledge_texts
 from octop.infra.knowledge.gate import assert_knowledge_usable
 from octop.infra.knowledge.index import Hit
 from octop.infra.knowledge.plane import open_knowledge_index
+from octop.infra.utils.offload import Pool, run_blocking
 
 DEFAULT_RETRIEVAL_K = 8
 DEFAULT_CONTEXT_CHAR_BUDGET = 6000
@@ -35,21 +35,22 @@ async def retrieve_context(
     """Return formatted readable context, skipping unavailable or failed retrieval."""
     if not (query or "").strip() or not knowledge_base_ids or k <= 0 or char_budget <= 0:
         return ""
-    loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(
-            None,
-            lambda: _retrieve_context_sync(
-                services,
-                user_id=user_id,
-                is_admin=is_admin,
-                query=query,
-                knowledge_base_ids=knowledge_base_ids,
-                k=k,
-                char_budget=char_budget,
-                locale=locale,
-                visible_bases=visible_bases,
-            ),
+        # Runs on every turn that touches a knowledge base, so it must never wait
+        # behind an installer: IO, never SUBPROCESS.
+        return await run_blocking(
+            _retrieve_context_sync,
+            services,
+            user_id=user_id,
+            is_admin=is_admin,
+            query=query,
+            knowledge_base_ids=knowledge_base_ids,
+            k=k,
+            char_budget=char_budget,
+            locale=locale,
+            visible_bases=visible_bases,
+            pool=Pool.IO,
+            label="retrieve_context",
         )
     except Exception:
         logger.warning("knowledge retrieval skipped for user=%s", user_id, exc_info=True)

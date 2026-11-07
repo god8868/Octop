@@ -13,6 +13,7 @@ from octop.infra.knowledge.ocr import optional_ocr_extractor
 from octop.infra.knowledge.params import get_advanced_settings
 from octop.infra.knowledge.parse import parse_document
 from octop.infra.knowledge.plane import open_knowledge_index
+from octop.infra.utils.offload import Pool, run_blocking
 
 # Parsing/OCR also consumes memory; only one document should be in flight.
 INDEX_CONCURRENCY = 1
@@ -63,12 +64,21 @@ def process_document(services: Any, kb_id: str, doc_id: str) -> None:
 
 def enqueue_index_document(services: Any, kb_id: str, doc_id: str) -> asyncio.Task[None]:
     """Schedule CPU- and I/O-bound indexing outside the event loop."""
-    loop = asyncio.get_running_loop()
     sem = _get_index_semaphore()
 
     async def _run() -> None:
         async with sem:
-            await loop.run_in_executor(None, process_document, services, kb_id, doc_id)
+            # Parse + embed + write takes minutes on a large document. The
+            # semaphore already serializes indexing to one document, so the
+            # narrow pool costs no throughput and keeps the wait off IO.
+            await run_blocking(
+                process_document,
+                services,
+                kb_id,
+                doc_id,
+                pool=Pool.SUBPROCESS,
+                label="index_document",
+            )
 
     return asyncio.create_task(_run())
 

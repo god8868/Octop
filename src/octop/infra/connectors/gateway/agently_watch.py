@@ -10,12 +10,12 @@ import re
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any
 
 from octop.infra.connectors.gateway.adapters.agently_cli import prepare_env
 from octop.infra.connectors.gateway.agently_auth import stop_process
 from octop.infra.connectors.gateway.cli_runner import resolve_binary
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 MailCallback = Callable[[str], Awaitable[None]]
@@ -76,9 +76,12 @@ class AgentlyWatchManager:
         while True:
             process = None
             try:
-                loop = asyncio.get_running_loop()
-                binary = await loop.run_in_executor(None, resolve_binary, "agently-cli")
-                env = await loop.run_in_executor(None, partial(prepare_env, creds))
+                binary = await run_blocking(
+                    resolve_binary, "agently-cli", pool=Pool.IO, label="resolve_agently_cli"
+                )
+                env = await run_blocking(
+                    prepare_env, creds, pool=Pool.IO, label="agently_prepare_env"
+                )
                 process = await asyncio.create_subprocess_exec(
                     binary,
                     "message",

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from functools import partial
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,6 +13,7 @@ from octop.infra.control.desktop.setup import (
     read_geometry,
 )
 from octop.infra.users.identity import User
+from octop.infra.utils.offload import Pool, run_blocking
 
 router = APIRouter()
 
@@ -39,8 +37,9 @@ async def set_desktop_geometry(
     if desktop_status().platform != "linux":
         raise HTTPException(status_code=400, detail="geometry change is only supported on Linux")
     parse_geometry(body.geometry)
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, partial(apply_geometry, body.geometry))
+    # The resize script restarts Xvnc and is allowed 120 s, so this is not the
+    # millisecond-scale class: keep it off the pool that serves DB reads.
+    await run_blocking(apply_geometry, body.geometry, pool=Pool.SUBPROCESS, label="apply_geometry")
     w, h = parse_geometry(body.geometry)
     return {"ok": True, "geometry": body.geometry, "width": w, "height": h}
 
