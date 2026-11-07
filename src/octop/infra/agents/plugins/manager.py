@@ -68,14 +68,23 @@ _CHANNEL_FINGERPRINTS: dict[str, str] = {}
 
 
 def _channel_fingerprint(directory: Path) -> str:
+    """Fingerprint a channel plugin by file metadata, not by contents.
+
+    Reading every asset of a bundled JS plugin on each load was the expensive
+    part; size plus ``mtime_ns`` changes whenever an installer rewrites a file,
+    and the install path always recomputes, so a stale cache cannot outlive an
+    update. Files whose mtime is preserved while their bytes change within the
+    same timestamp tick are the only miss, which installers do not do.
+    """
     digest = hashlib.sha256()
     for path in sorted(directory.rglob("*")):
         if not path.is_file() or any(
             part in {"__pycache__", ".git"} for part in path.relative_to(directory).parts
         ):
             continue
+        stat = path.stat()
         digest.update(str(path.relative_to(directory)).encode())
-        digest.update(path.read_bytes())
+        digest.update(f":{stat.st_size}:{stat.st_mtime_ns}".encode())
     return digest.hexdigest()
 
 
