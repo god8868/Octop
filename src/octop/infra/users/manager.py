@@ -36,6 +36,7 @@ from octop.infra.users.preferences import (
     validate_remote_browser_bookmarks,
 )
 from octop.infra.utils.locale import normalize_locale
+from octop.infra.utils.offload import run_blocking
 
 logger = logging.getLogger(__name__)
 _USERNAME_ALLOWED = re.compile(r"[^a-zA-Z0-9_.-]")
@@ -145,7 +146,10 @@ class UserManager:
             if not password:
                 raise OctopError(ErrorCode.PASSWORD_TOO_WEAK, "password is required")
             validate_password_policy(password)
-            password_hash = hash_password(password)
+            # Admin creating a user: one hash, but it is the same 60ms that
+            # freezes every other request, and this path is reachable from the
+            # console mid-session.
+            password_hash = await run_blocking(hash_password, password, label="hash_password")
             sso_provider_id = None
         try:
             keys = validate_permission_keys(permissions or [])
@@ -487,7 +491,16 @@ class UserManager:
                 "account temporarily locked",
                 details={"retry_after_seconds": retry_after, "minutes": minutes},
             )
-        if not verify_password(password, row.password_hash):
+        # Argon2id costs 40-80ms of CPU, and argon2-cffi releases the GIL, so a
+        # worker thread genuinely overlaps it with other requests. Left inline it
+        # serialises every login behind one event loop: eight simultaneous
+        # logins measured 527ms each, with the whole server frozen for ~60ms a
+        # piece. The io pool caps a burst at eight hashes; the subprocess pool
+        # would cap it at two, but then a model download would hold the door
+        # shut on everyone trying to sign in.
+        if not await run_blocking(
+            verify_password, password, row.password_hash, label="verify_password"
+        ):
             retry_after = self._services.user_repo.record_failed_login(
                 row.id,
                 max_attempts=self._login_max_attempts,
@@ -531,10 +544,13 @@ class UserManager:
                 ErrorCode.PASSWORD_NOT_SET,
                 "this account has no local password to change",
             )
-        if not verify_password(old, row.password_hash):
+        if not await run_blocking(verify_password, old, row.password_hash, label="verify_password"):
             raise OctopError(ErrorCode.AUTH_FAILED, "current password incorrect")
         validate_password_policy(new, old_password=old)
-        self._services.user_repo.set_password_hash(row.id, hash_password(new))
+        # Verify plus hash is ~120ms of CPU that used to freeze every other
+        # request while the user waited.
+        hashed = await run_blocking(hash_password, new, label="hash_password")
+        self._services.user_repo.set_password_hash(row.id, hashed)
         self._services.user_repo.clear_login_lockout(row.id)
         self._services.audit_repo.write(
             actor=username, action="user.password_changed", target=username
@@ -546,7 +562,9 @@ class UserManager:
         if row is None:
             raise OctopError(ErrorCode.NOT_FOUND, "user not found")
         validate_password_policy(new)
-        self._services.user_repo.set_password_hash(row.id, hash_password(new))
+        self._services.user_repo.set_password_hash(
+            row.id, await run_blocking(hash_password, new, label="hash_password")
+        )
         self._services.user_repo.clear_login_lockout(row.id)
         self._services.audit_repo.write(
             actor=ACTOR_ADMIN, action="user.password_reset", target=username

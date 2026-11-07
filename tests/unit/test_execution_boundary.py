@@ -43,6 +43,12 @@ _FORBIDDEN_IN_ASYNC = frozenset(
         "subprocess.check_output",
         "time.sleep",
         "sleep",
+        # Argon2id is 40-80ms of CPU per call. Inline it serialises every login
+        # behind the event loop: eight simultaneous logins were measured at
+        # 527ms each. Named here rather than left to review because the call
+        # reads like a pure function, not like something that stops the server.
+        "verify_password",
+        "hash_password",
     }
 )
 

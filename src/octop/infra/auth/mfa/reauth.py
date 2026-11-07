@@ -35,7 +35,11 @@ async def prove_password(
     if row is None:
         raise OctopError(ErrorCode.AUTH_FAILED, "user not found")
     if row.password_hash:
-        if verify_password(password, row.password_hash):
+        # Same Argon2 cost as a login: leaving it inline freezes the server for
+        # the duration of a step-up check.
+        if await run_blocking(
+            verify_password, password, row.password_hash, label="verify_password"
+        ):
             return
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid credentials")
     # No local password: directory-provisioned accounts may prove via LDAP.
