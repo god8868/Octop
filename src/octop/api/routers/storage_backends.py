@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from functools import partial
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -21,13 +23,22 @@ from octop.infra.users.groups import (
 admin_router = APIRouter()
 
 
-def _ensure_opensandbox_sdk(kind: str) -> None:
+async def _ensure_opensandbox_sdk(kind: str) -> None:
+    """Install the OpenSandbox SDK without stalling the event loop.
+
+    This is a package install on first enable, and it used to run inline in the
+    request: one admin saving an OpenSandbox backend blocked every other request
+    — agents, streams, health checks — for the whole download. The executor keeps
+    the request's own latency identical while the rest of the server keeps
+    serving.
+    """
     if kind != "opensandbox":
         return
     from octop.infra.backend.opensandbox_deps import ensure_opensandbox_deps
 
+    loop = asyncio.get_running_loop()
     try:
-        ensure_opensandbox_deps(allow_install=True)
+        await loop.run_in_executor(None, partial(ensure_opensandbox_deps, allow_install=True))
     except RuntimeError as exc:
         raise OctopError(ErrorCode.STORAGE_BACKEND_DEPS_FAILED, str(exc)) from exc
 
@@ -136,7 +147,7 @@ async def create_storage_backend(
 ) -> dict[str, Any]:
     if server.services.storage_backend_repo.get_by_name(body.name) is not None:
         raise OctopError(ErrorCode.STORAGE_BACKEND_NAME_TAKEN, f"name {body.name!r} already exists")
-    _ensure_opensandbox_sdk((body.kind or "").lower())
+    await _ensure_opensandbox_sdk((body.kind or "").lower())
     bid = server.services.storage_backend_repo.create(
         name=body.name,
         kind=body.kind,
@@ -170,7 +181,7 @@ async def patch_storage_backend(
         raise OctopError(ErrorCode.NOT_FOUND, "storage backend not found")
     next_kind = (body.kind or row.kind or "").lower()
     if body.enabled is True:
-        _ensure_opensandbox_sdk(next_kind)
+        await _ensure_opensandbox_sdk(next_kind)
 
     new_name: str | None = None
     if body.name is not None:
