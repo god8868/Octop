@@ -48,8 +48,22 @@ def parse_document(path: Path, *, ocr: OcrExtractor | None = None) -> str:
         return _parse_delimited(path, delimiter="\t")
     if suffix == ".pdf":
         from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
 
-        text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+        try:
+            reader = PdfReader(path)
+            # An encrypted PDF that accepts the empty password is still readable;
+            # one that does not must fail with a message the user can act on.
+            # ``getattr`` keeps duck-typed readers (tests, alternative backends)
+            # working when they do not expose the encryption probe.
+            if getattr(reader, "is_encrypted", False) and not reader.decrypt(""):
+                raise ValueError(
+                    f"encrypted PDF {path.name!r} cannot be read; "
+                    "remove the password before uploading"
+                )
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except PyPdfError as exc:
+            raise ValueError(f"failed to read PDF {path.name!r}: {exc}") from exc
         if text.strip() or ocr is None:
             return text
         return ocr(path)

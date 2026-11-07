@@ -257,3 +257,34 @@ def test_parse_wps_raises_when_anydoc_returns_empty(
     )
     with pytest.raises(ValueError, match="failed to extract"):
         parse_document(path)
+
+
+def _write_pdf(path: Path, *, password: str | None = None) -> Path:
+    """Write a one-page PDF, optionally encrypted with *password*."""
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    if password is not None:
+        writer.encrypt(password)
+    with path.open("wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def test_parse_plain_pdf_returns_text(tmp_path: Path) -> None:
+    path = _write_pdf(tmp_path / "plain.pdf")
+    assert parse_document(path) == ""
+
+
+def test_parse_password_protected_pdf_raises_value_error(tmp_path: Path) -> None:
+    path = _write_pdf(tmp_path / "secret.pdf", password="pw")
+    with pytest.raises(ValueError, match="encrypted PDF"):
+        parse_document(path)
+
+
+def test_parse_corrupt_pdf_raises_value_error(tmp_path: Path) -> None:
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"%PDF-1.4 truncated garbage")
+    with pytest.raises(ValueError, match="failed to read PDF"):
+        parse_document(path)
