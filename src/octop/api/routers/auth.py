@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Literal
 
@@ -17,6 +16,7 @@ from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.email import normalize_email
 from octop.infra.users.permissions import effective_permissions
 from octop.infra.utils.locale import normalize_locale
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +145,12 @@ async def _authenticate_ldap(server: Any, username: str, password: str, client_i
     # An OctopError raised here (LDAP_UNAVAILABLE, LDAP_GROUP_NOT_ALLOWED, …) is a
     # real answer and propagates unchanged. Outages are not credential failures,
     # so they never count towards the brute-force budget.
-    identity = await asyncio.get_running_loop().run_in_executor(
-        None, service.directory_authenticate, username, password
+    identity = await run_blocking(
+        service.directory_authenticate,
+        username,
+        password,
+        pool=Pool.IO,
+        label="ldap_bind",
     )
     if identity is None:
         retry_after = throttle.record_failure(username, client_ip)

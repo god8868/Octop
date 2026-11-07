@@ -24,6 +24,7 @@ from octop.api.routers.ollama_download_store import (
     get_tasks,
     update_status,
 )
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -172,29 +173,29 @@ async def download_ollama_model(
         source="ollama",
     )
 
-    loop = asyncio.get_running_loop()
     asyncio.create_task(
-        _run_pull_in_background(task.task_id, body.name, loop),
+        _run_pull_in_background(task.task_id, body.name),
         name=f"ollama-download-{task.task_id}",
     )
 
     return _task_to_response(task)
 
 
-async def _run_pull_in_background(
-    task_id: str,
-    name: str,
-    loop: asyncio.AbstractEventLoop,
-) -> None:
+async def _run_pull_in_background(task_id: str, name: str) -> None:
     """Execute the Ollama pull in a thread and update task status."""
     from octop.infra.utils.ollama_manager import OllamaModelInfo, OllamaModelManager
 
     await update_status(task_id, DownloadTaskStatus.DOWNLOADING)
 
     try:
-        info: OllamaModelInfo = await loop.run_in_executor(
-            None,
-            lambda: OllamaModelManager.pull_model(name),
+        # A pull is gigabytes with no upper bound, so it belongs on the narrow
+        # pool that installers use — not on IO, where it would hold a slot for
+        # as long as the registry takes.
+        info: OllamaModelInfo = await run_blocking(
+            OllamaModelManager.pull_model,
+            name,
+            pool=Pool.SUBPROCESS,
+            label="ollama_pull_model",
         )
         result_dict = info.model_dump()
         await update_status(

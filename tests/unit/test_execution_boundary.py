@@ -46,27 +46,12 @@ _FORBIDDEN_IN_ASYNC = frozenset(
 )
 
 #: ``run_in_executor(None, ...)`` still present, keyed by file then function.
-#: 23 call sites across 17 files when this guard was written. Only shrinks.
+#: 11 call sites across 9 files when this guard was written. Only shrinks.
 _DEFAULT_EXECUTOR_BASELINE: dict[str, dict[str, int]] = {
-    "src/octop/api/routers/auth.py": {"_authenticate_ldap": 1},
-    "src/octop/api/routers/auth_ldap.py": {"test_ldap_config": 1},
-    "src/octop/api/routers/auth_oauth.py": {
-        "oauth_bind_start": 1,
-        "oauth_start": 1,
-        "test_oauth_provider": 1,
-    },
-    "src/octop/api/routers/auth_oidc.py": {"oidc_start": 1, "test_oidc_config": 1},
     "src/octop/api/routers/desktop/settings.py": {"set_desktop_geometry": 1},
-    "src/octop/api/routers/ollama_models.py": {"_run_pull_in_background": 1},
     "src/octop/api/routers/terminal.py": {"_destroy_session": 1},
     "src/octop/infra/agents/memory/slim.py": {"_run_postgres": 1, "inspect_storage": 1},
-    "src/octop/infra/agents/providers/onnx_service.py": {
-        "_run": 1,
-        "probe_local_model": 1,
-    },
     "src/octop/infra/agents/settings/langfuse.py": {"test_connection": 1},
-    "src/octop/infra/auth/mfa/reauth.py": {"prove_password": 1},
-    "src/octop/infra/auth/sso/service.py": {"handle_callback": 1},
     "src/octop/infra/connectors/gateway/agently_auth.py": {"_spawn": 1},
     "src/octop/infra/connectors/gateway/agently_watch.py": {"_listen": 2},
     "src/octop/infra/knowledge/jobs.py": {"_run": 1},

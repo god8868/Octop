@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
 
@@ -17,6 +16,7 @@ from octop.infra.db.repos.auth_challenges import KIND_REAUTH, AuthChallengeRepo
 from octop.infra.db.services import SharedServices
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.password import verify_password
+from octop.infra.utils.offload import Pool, run_blocking
 
 
 async def prove_password(
@@ -51,8 +51,12 @@ async def prove_password(
                 "too many directory login attempts",
                 details={"retry_after_seconds": retry_after, "minutes": minutes},
             )
-    identity = await asyncio.get_running_loop().run_in_executor(
-        None, ldap_service.directory_authenticate, row.username, password
+    identity = await run_blocking(
+        ldap_service.directory_authenticate,
+        row.username,
+        password,
+        pool=Pool.IO,
+        label="reauth_ldap_bind",
     )
     if identity is None:
         if throttle is not None:

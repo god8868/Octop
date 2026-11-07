@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Request
@@ -14,6 +13,7 @@ from octop.infra.auth.ldap.service import LdapAuthService
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
 from octop.infra.utils.locale import resolve_request_locale
+from octop.infra.utils.offload import Pool, run_blocking
 
 router = APIRouter()
 
@@ -206,7 +206,9 @@ async def test_ldap_config(
     """Bind with the stored service account and probe the configured user base DN."""
     service = _service(server)
     try:
-        probe = await asyncio.get_running_loop().run_in_executor(None, service.test_connection)
+        probe = await run_blocking(
+            service.test_connection, pool=Pool.IO, label="ldap_test_connection"
+        )
     except ValueError as exc:
         raise _bad_request(exc) from exc
     message = tr(f"ldap.test.{probe.code}", resolve_request_locale(request))

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import secrets
-from functools import partial
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Request
@@ -22,6 +20,7 @@ from octop.api.routers.auth import _user_json
 from octop.infra.auth.sso.service import SsoService
 from octop.infra.auth.tokens import PURPOSE_ACCESS
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.utils.offload import Pool, run_blocking
 
 router = APIRouter()
 
@@ -104,13 +103,12 @@ async def oidc_start(
     """Create OIDC state and return the identity provider authorization URL."""
     service = _service(server)
     try:
-        started = await asyncio.get_running_loop().run_in_executor(
-            None,
-            partial(
-                service.start_login,
-                redirect_after=body.redirect_after,
-                public_base=_public_base(request),
-            ),
+        started = await run_blocking(
+            service.start_login,
+            redirect_after=body.redirect_after,
+            public_base=_public_base(request),
+            pool=Pool.IO,
+            label="oidc_start_login",
         )
         state = started.get("state")
         if not isinstance(state, str) or not state:
@@ -186,8 +184,10 @@ async def test_oidc_config(
 ) -> dict[str, bool | str]:
     """Fetch OIDC discovery metadata and JWKS without changing configuration."""
     try:
-        return await asyncio.get_running_loop().run_in_executor(
-            None, _service(server).test_connection
+        return await run_blocking(
+            _service(server).test_connection,
+            pool=Pool.IO,
+            label="oidc_test_connection",
         )
     except ValueError as exc:
         raise _bad_request(exc) from exc

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import secrets
-from functools import partial
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Request
@@ -23,6 +21,7 @@ from octop.infra.auth.sso.service import SsoService
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
 from octop.infra.users.permissions import user_has_permission
+from octop.infra.utils.offload import Pool, run_blocking
 
 _SSO_KIND_PERMISSION = {
     "feishu": "sso_feishu",
@@ -98,14 +97,13 @@ async def oauth_start(
     """Create login state and return the identity provider authorization URL."""
     service = _service(server)
     try:
-        started = await asyncio.get_running_loop().run_in_executor(
-            None,
-            partial(
-                service.start_login_for_kind,
-                body.kind,
-                redirect_after=body.redirect_after,
-                public_base=_public_base(request),
-            ),
+        started = await run_blocking(
+            service.start_login_for_kind,
+            body.kind,
+            redirect_after=body.redirect_after,
+            public_base=_public_base(request),
+            pool=Pool.IO,
+            label="sso_start_login",
         )
         state = started.get("state")
         if not isinstance(state, str) or not state:
@@ -163,15 +161,14 @@ async def oauth_bind_start(
     """Start an OAuth flow that binds the identity to the current user."""
     service = _service(server)
     try:
-        started = await asyncio.get_running_loop().run_in_executor(
-            None,
-            partial(
-                service.start_login_for_kind,
-                body.kind,
-                redirect_after=body.redirect_after,
-                public_base=_public_base(request),
-                bind_user_id=user.id,
-            ),
+        started = await run_blocking(
+            service.start_login_for_kind,
+            body.kind,
+            redirect_after=body.redirect_after,
+            public_base=_public_base(request),
+            bind_user_id=user.id,
+            pool=Pool.IO,
+            label="sso_start_bind",
         )
         state = started.get("state")
         if not isinstance(state, str) or not state:
@@ -248,8 +245,11 @@ async def test_oauth_provider(
     """Verify provider credentials without changing configuration."""
     _require_sso_kind(user, kind)
     try:
-        return await asyncio.get_running_loop().run_in_executor(
-            None, partial(_service(server).test_connection_for_kind, kind)
+        return await run_blocking(
+            _service(server).test_connection_for_kind,
+            kind,
+            pool=Pool.IO,
+            label="sso_test_connection",
         )
     except ValueError as exc:
         raise _bad_request(exc) from exc

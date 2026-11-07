@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import partial
 from typing import Any
 from urllib.parse import urlencode
 
@@ -29,6 +27,7 @@ from octop.infra.db.services import SharedServices
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import User
 from octop.infra.users.manager import UserManager
+from octop.infra.utils.offload import Pool, run_blocking
 
 _LOGIN_STATE_TTL_SECONDS = 600
 _LOGIN_CODE_TTL_SECONDS = 60
@@ -286,15 +285,14 @@ class SsoService:
         redirect_uri = build_redirect_uri(public_base, adapter.callback_path)
 
         try:
-            subject, claims = await asyncio.get_running_loop().run_in_executor(
-                None,
-                partial(
-                    adapter.complete_login,
-                    code,
-                    row=provider,
-                    login_state=login_state,
-                    redirect_uri=redirect_uri,
-                ),
+            subject, claims = await run_blocking(
+                adapter.complete_login,
+                code,
+                row=provider,
+                login_state=login_state,
+                redirect_uri=redirect_uri,
+                pool=Pool.IO,
+                label="sso_complete_login",
             )
         except jwt.InvalidTokenError:
             logger.exception("SSO callback returned an invalid token (kind=%s)", provider.kind)

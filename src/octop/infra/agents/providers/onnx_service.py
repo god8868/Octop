@@ -501,8 +501,7 @@ async def probe_local_model(model: str) -> dict[str, Any]:
 
     started = time.perf_counter()
     try:
-        loop = asyncio.get_running_loop()
-        dim = await loop.run_in_executor(None, _run)
+        dim = await run_blocking(_run, pool=Pool.IO, label="onnx_embed_probe")
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "latency_ms": (time.perf_counter() - started) * 1000.0, "dim": dim}
@@ -583,11 +582,14 @@ class OnnxDownloadManager:
             self._state.task_id = task_id
             self._state.updated_at = time.time()
 
-        loop = asyncio.get_running_loop()
-
         async def _run() -> None:
             try:
-                await loop.run_in_executor(None, self._download_sync, model_name)
+                await run_blocking(
+                    self._download_sync,
+                    model_name,
+                    pool=Pool.SUBPROCESS,
+                    label="onnx_download_model",
+                )
                 self._set(
                     status=OnnxDownloadStatus.DONE,
                     progress=1.0,
