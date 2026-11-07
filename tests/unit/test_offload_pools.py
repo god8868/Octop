@@ -139,7 +139,7 @@ def test_a_timeout_stops_the_wait() -> None:
 
     async def scenario() -> None:
         with pytest.raises(TimeoutError):
-            await run_blocking(sleep, 0.3, timeout=0.05)
+            await run_blocking(sleep, 0.3, wait_timeout=0.05)
 
     asyncio.run(scenario())
 

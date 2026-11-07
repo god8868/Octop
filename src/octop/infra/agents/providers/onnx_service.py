@@ -27,6 +27,7 @@ from octop.infra.agents.providers.onnx_catalog import (
     list_onnx_catalog_models,
 )
 from octop.infra.agents.providers.onnx_download import download_model_raced
+from octop.infra.utils.offload import Pool, run_blocking
 from octop.infra.utils.paths import PathLayout
 from octop.infra.utils.runtime_packages import (
     PackageInstallSpec,
@@ -113,11 +114,17 @@ async def ensure_local_embedding_deps_async(
     *,
     allow_install: bool | None = None,
 ) -> str:
-    """Async wrapper for :func:`ensure_local_embedding_deps`."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: ensure_local_embedding_deps(allow_install=allow_install),
+    """Run :func:`ensure_local_embedding_deps` on the subprocess pool.
+
+    The whole call leaves the loop, not just the install: the availability check
+    imports ``fastembed``, and a cold import of it costs more than the thread hop
+    it would save.
+    """
+    return await run_blocking(
+        ensure_local_embedding_deps,
+        allow_install=allow_install,
+        pool=Pool.SUBPROCESS,
+        label="ensure_local_embedding_deps",
     )
 
 

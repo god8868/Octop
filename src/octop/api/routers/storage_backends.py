@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from functools import partial
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -28,17 +27,16 @@ async def _ensure_opensandbox_sdk(kind: str) -> None:
 
     This is a package install on first enable, and it used to run inline in the
     request: one admin saving an OpenSandbox backend blocked every other request
-    — agents, streams, health checks — for the whole download. The executor keeps
-    the request's own latency identical while the rest of the server keeps
-    serving.
+    — agents, streams, health checks — for the whole download. The install runs
+    on the subprocess pool, so it also cannot starve the DB or IO pools while it
+    holds its thread.
     """
     if kind != "opensandbox":
         return
-    from octop.infra.backend.opensandbox_deps import ensure_opensandbox_deps
+    from octop.infra.backend.opensandbox_deps import ensure_opensandbox_deps_async
 
-    loop = asyncio.get_running_loop()
     try:
-        await loop.run_in_executor(None, partial(ensure_opensandbox_deps, allow_install=True))
+        await ensure_opensandbox_deps_async(allow_install=True)
     except RuntimeError as exc:
         raise OctopError(ErrorCode.STORAGE_BACKEND_DEPS_FAILED, str(exc)) from exc
 
@@ -298,7 +296,7 @@ async def probe_storage_backend_config(
         config_json=body.config_json,
         base=base,
     )
-    return probe_storage_backend(row)
+    return await asyncio.to_thread(probe_storage_backend, row)
 
 
 def _storage_browse_octop_error(exc: BaseException) -> OctopError:
@@ -426,7 +424,7 @@ async def test_storage_backend(
         raise OctopError(ErrorCode.NOT_FOUND, "storage backend not found")
     from octop.infra.backend.probe import probe_storage_backend
 
-    return probe_storage_backend(row)
+    return await asyncio.to_thread(probe_storage_backend, row)
 
 
 user_router = APIRouter()

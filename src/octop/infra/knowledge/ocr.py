@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -18,6 +17,7 @@ from langchain_core.messages import HumanMessage
 from octop.infra.agents.providers.model_flags import is_chat_eligible_model, is_vision_model
 from octop.infra.agents.providers.probe import build_probe_chat_model
 from octop.infra.utils.llm_text import llm_text_content
+from octop.infra.utils.offload import Pool, run_blocking
 from octop.infra.utils.runtime_packages import PackageInstallSpec, install_packages
 
 logger = logging.getLogger(__name__)
@@ -142,8 +142,18 @@ def ensure_ocr_deps(*, backend: str) -> str:
 
 
 async def ensure_ocr_deps_async(*, backend: str) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: ensure_ocr_deps(backend=backend))
+    """Run :func:`ensure_ocr_deps` on the subprocess pool.
+
+    The whole call leaves the loop, not just the install: the availability check
+    imports ``pymupdf`` and ``rapidocr``, and a cold import of either costs more
+    than the thread hop it would save.
+    """
+    return await run_blocking(
+        ensure_ocr_deps,
+        backend=backend,
+        pool=Pool.SUBPROCESS,
+        label="ensure_ocr_deps",
+    )
 
 
 def _provider_for_config(provider_repo: Any, config: OcrConfig) -> Any | None:

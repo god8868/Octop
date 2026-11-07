@@ -92,24 +92,28 @@ async def run_blocking[T](
     fn: Callable[..., T],
     *args: Any,
     pool: Pool = Pool.IO,
-    timeout: float | None = None,
+    wait_timeout: float | None = None,
     label: str | None = None,
     **kwargs: Any,
 ) -> T:
     """Call ``fn(*args, **kwargs)`` on *pool* and return its result.
 
-    *timeout* stops waiting; it cannot stop the thread. Pass it only where
+    *wait_timeout* stops waiting; it cannot stop the thread. Pass it only where
     abandoning the result is safe — for subprocess work put the timeout on the
     child process instead, or the call keeps running invisibly.
+
+    It is deliberately not called ``timeout``: many blocking functions take a
+    ``timeout`` of their own, and a same-named parameter here would silently
+    swallow it instead of forwarding it.
     """
     loop = asyncio.get_running_loop()
     name = label or getattr(fn, "__qualname__", None) or repr(fn)
     started = perf_counter()
     future = loop.run_in_executor(executor_for(pool), partial(fn, *args, **kwargs))
     try:
-        if timeout is None:
+        if wait_timeout is None:
             return await future
-        return cast("T", await asyncio.wait_for(future, timeout))
+        return cast("T", await asyncio.wait_for(future, wait_timeout))
     finally:
         _record(name, pool, (perf_counter() - started) * 1000.0)
 

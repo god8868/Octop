@@ -8,7 +8,6 @@ hand-rolling ``pip`` / ``uv pip`` commands.
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import importlib.util
 import logging
@@ -21,6 +20,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -248,15 +249,27 @@ async def install_packages_async(
     import_modules: Sequence[str] = (),
     timeout: int = INSTALL_TIMEOUT_SEC,
 ) -> InstallOutcome:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: install_packages(
-            spec,
-            is_satisfied=is_satisfied,
-            import_modules=import_modules,
-            timeout=timeout,
-        ),
+    """Install *spec* without blocking the event loop.
+
+    Runs on ``Pool.SUBPROCESS`` rather than the shared default executor. An
+    install can hold its thread for the whole ten-minute timeout, and every
+    caller queued behind ``_INSTALL_LOCK`` holds another one while it waits; on
+    the shared pool that is enough to starve unrelated offloaded work and make
+    the server look slow while the CPU sits idle.
+
+    The surrounding availability check stays with the caller: in
+    :mod:`octop.infra.backend.opensandbox_deps` it is a ``find_spec``, which
+    never executes the module. Callers whose check imports the package should
+    offload the whole check instead — see ``ensure_ocr_deps_async``.
+    """
+    return await run_blocking(
+        install_packages,
+        spec,
+        is_satisfied=is_satisfied,
+        import_modules=import_modules,
+        timeout=timeout,
+        pool=Pool.SUBPROCESS,
+        label="install_packages",
     )
 
 
