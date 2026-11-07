@@ -18,6 +18,7 @@ from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.identity import Role, User
 from octop.infra.users.password import hash_password, validate_password_policy
 from octop.infra.utils.locale import normalize_locale
+from octop.infra.utils.offload import run_blocking
 
 DEFAULT_EXPIRES_DAYS = 7
 MIN_EXPIRES_DAYS = 1
@@ -152,7 +153,7 @@ class InviteService:
         _role_defaults_for_invite(self._services.db, row)
         return {"ok": True, "expires_at": row.expires_at}
 
-    def redeem(
+    async def redeem(
         self,
         *,
         code: str,
@@ -181,11 +182,15 @@ class InviteService:
             self._services.db,
             self._repo.get_by_code(cleaned_code),
         )
+        # Hash before taking the row so the ~66ms argon2 cost is not spent inside
+        # a transaction, and off the loop so it is not spent by every other
+        # request either.
+        password_hash = await run_blocking(hash_password, password, label="hash_password")
         try:
             user_id, _invite = self._repo.redeem_creating_user(
                 code=cleaned_code,
                 username=cleaned_username,
-                password_hash=hash_password(password),
+                password_hash=password_hash,
                 display_name=name,
                 locale=loc,
                 email=normalized_email,

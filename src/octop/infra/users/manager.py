@@ -219,7 +219,7 @@ class UserManager:
         from octop.infra.users.invites import InviteService
 
         async with self._lock:
-            return InviteService(self._services).redeem(
+            return await InviteService(self._services).redeem(
                 code=code,
                 username=username,
                 password=password,

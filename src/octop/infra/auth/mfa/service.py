@@ -190,7 +190,7 @@ class MfaService:
             )
         raise OctopError(ErrorCode.MFA_INVALID, "invalid MFA code")
 
-    def verify_mfa(
+    async def verify_mfa(
         self,
         *,
         mfa_token: str,
@@ -214,7 +214,9 @@ class MfaService:
                 code or "",
             )
         elif method == "recovery":
-            ok = recovery_mod.try_spend_code(self._s.user_recovery_code_repo, user_id, code or "")
+            ok = await recovery_mod.try_spend_code(
+                self._s.user_recovery_code_repo, user_id, code or ""
+            )
             if ok:
                 self._s.audit_repo.write(
                     actor=user.username, action="auth.mfa_recovery_used", target=str(user_id)
@@ -358,7 +360,7 @@ class MfaService:
             username=user.username,
         )
 
-    def totp_confirm(self, user: User, *, reauth_token: str, code: str) -> dict[str, Any]:
+    async def totp_confirm(self, user: User, *, reauth_token: str, code: str) -> dict[str, Any]:
         jti = self._require_reauth(user.id, reauth_token)
         ok = totp_mod.confirm_enroll(self._s.user_totp_repo, self._s.secret_repo, user.id, code)
         if not ok:
@@ -366,7 +368,7 @@ class MfaService:
         reauth_mod.burn_reauth_grant(self._s.auth_challenge_repo, jti)
         codes: list[str] | None = None
         if self._s.user_recovery_code_repo.count_unused(user.id) == 0:
-            codes = recovery_mod.issue_codes(self._s.user_recovery_code_repo, user.id)
+            codes = await recovery_mod.issue_codes(self._s.user_recovery_code_repo, user.id)
         version = self._s.user_repo.bump_mfa_version(user.id)
         self._s.audit_repo.write(actor=user.username, action="auth.mfa_enrolled", target="totp")
         token, ttl = self.mint_access_token(user)
@@ -411,7 +413,7 @@ class MfaService:
             origin=origin,
         )
 
-    def passkey_register_verify(
+    async def passkey_register_verify(
         self,
         user: User,
         *,
@@ -433,7 +435,7 @@ class MfaService:
         reauth_mod.burn_reauth_grant(self._s.auth_challenge_repo, jti)
         codes: list[str] | None = None
         if self._s.user_recovery_code_repo.count_unused(user.id) == 0:
-            codes = recovery_mod.issue_codes(self._s.user_recovery_code_repo, user.id)
+            codes = await recovery_mod.issue_codes(self._s.user_recovery_code_repo, user.id)
         version = self._s.user_repo.bump_mfa_version(user.id)
         self._s.audit_repo.write(actor=user.username, action="auth.mfa_enrolled", target="passkey")
         token, ttl = self.mint_access_token(user)
@@ -467,14 +469,14 @@ class MfaService:
             "mfa_version": version,
         }
 
-    def recovery_regenerate(self, user: User, *, reauth_token: str) -> dict[str, Any]:
+    async def recovery_regenerate(self, user: User, *, reauth_token: str) -> dict[str, Any]:
         jti = self._require_reauth(user.id, reauth_token)
         if not self.has_verified_factor(user.id):
             raise OctopError(
                 ErrorCode.MFA_INVALID,
                 "recovery codes require a verified MFA factor",
             )
-        codes = recovery_mod.issue_codes(self._s.user_recovery_code_repo, user.id)
+        codes = await recovery_mod.issue_codes(self._s.user_recovery_code_repo, user.id)
         reauth_mod.burn_reauth_grant(self._s.auth_challenge_repo, jti)
         version = self._s.user_repo.bump_mfa_version(user.id)
         token, ttl = self.mint_access_token(user)

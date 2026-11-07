@@ -110,5 +110,5 @@ async def test_recovery_refused_without_verified_factor(env) -> None:
     mfa = MfaService(server.services)
     assert not mfa.has_verified_factor(user.id)
     with pytest.raises(OctopError) as ei:
-        mfa.recovery_regenerate(user, reauth_token="not-a-token")
+        await mfa.recovery_regenerate(user, reauth_token="not-a-token")
     assert ei.value.code in {ErrorCode.MFA_REAUTH_REQUIRED, ErrorCode.MFA_INVALID}

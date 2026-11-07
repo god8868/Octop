@@ -129,7 +129,7 @@ async def mfa_verify(
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     origin = request.headers.get("origin")
-    result = _mfa(server).verify_mfa(
+    result = await _mfa(server).verify_mfa(
         mfa_token=body.mfa_token,
         method=body.method,
         code=body.code,
@@ -227,7 +227,7 @@ async def totp_confirm(
     x_octop_reauth: str | None = Header(None, alias="X-Octop-Reauth"),
 ) -> dict[str, Any]:
     token = _reauth_token(header=x_octop_reauth, body_token=body.reauth_token)
-    result = _mfa(server).totp_confirm(user, reauth_token=token, code=body.code)
+    result = await _mfa(server).totp_confirm(user, reauth_token=token, code=body.code)
     result["user"] = me_payload(user, server)
     return result
 
@@ -267,7 +267,7 @@ async def passkey_register_verify(
     x_octop_reauth: str | None = Header(None, alias="X-Octop-Reauth"),
 ) -> dict[str, Any]:
     token = _reauth_token(header=x_octop_reauth, body_token=body.reauth_token)
-    result = _mfa(server).passkey_register_verify(
+    result = await _mfa(server).passkey_register_verify(
         user,
         reauth_token=token,
         credential=body.credential,
@@ -304,6 +304,6 @@ async def recovery_regenerate(
     x_octop_reauth: str | None = Header(None, alias="X-Octop-Reauth"),
 ) -> dict[str, Any]:
     token = _reauth_token(header=x_octop_reauth, body_token=body.reauth_token)
-    result = _mfa(server).recovery_regenerate(user, reauth_token=token)
+    result = await _mfa(server).recovery_regenerate(user, reauth_token=token)
     result["user"] = me_payload(user, server)
     return result
