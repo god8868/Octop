@@ -666,11 +666,19 @@ class TeamManager:
         # room. Mark the reply handled once it has been persisted, otherwise
         # the fallback path appends the same wrap-up a second time.
         if room_thread_id and text:
-            self._live_host_reply_counter += 1
-            self._live_host_replies[room_thread_id] = self._live_host_reply_counter
-            if len(self._live_host_replies) > _LIVE_HOST_REPLY_MAX:
-                self._evict_oldest_live_replies()
+            self._mark_live_host_reply(room_thread_id)
         return result
+
+    def _mark_live_host_reply(self, thread_id: str) -> None:
+        """Remember that the host already streamed a wrap-up for this room.
+
+        ``on_reply`` de-duplicates on this marker, so it is written where the
+        text is persisted and cleared only when the reply arrives.
+        """
+        self._live_host_reply_counter += 1
+        self._live_host_replies[thread_id] = self._live_host_reply_counter
+        if len(self._live_host_replies) > _LIVE_HOST_REPLY_MAX:
+            self._evict_oldest_live_replies()
 
     async def fan_in_peer_turn(
         self,

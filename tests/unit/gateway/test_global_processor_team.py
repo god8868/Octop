@@ -281,7 +281,7 @@ async def test_on_reply_skips_snapshot_after_live_host_wrapup(
     gateway = processor_env["gateway"]
     parent_sk = processor_env["parent_sk"]
     processor._agent_repo.create(agent_id="host", user_id=1, name="Host", kind="team")
-    processor.teams._live_host_replies.add("thr_parent")
+    processor.teams._mark_live_host_reply("thr_parent")
     frames: list[dict[str, object]] = []
 
     async def capture(frame: dict[str, object]) -> None:
@@ -1967,7 +1967,7 @@ async def test_on_reply_live_wrapup_still_pushes_im(processor_env: dict) -> None
     processor = processor_env["processor"]
     gateway = processor_env["gateway"]
     processor._agent_repo.create(agent_id="host", user_id=1, name="Host", kind="team")
-    processor.teams._live_host_replies.add("thr_parent")
+    processor.teams._mark_live_host_reply("thr_parent")
     _bind_im_session(processor_env)
     pushed: list[str] = []
 
