@@ -139,12 +139,16 @@ def build_app(server: OctopServer) -> FastAPI:
         )
 
     from octop.api.middleware.bridge_proxy import install as install_bridge_proxy
+    from octop.api.middleware.loop_lag import install as install_loop_lag
 
     # Bridge proxy must sit inside JWT auth so ``request.state.octop_user`` is set
     # (Starlette runs the last-added middleware first).
     install_bridge_proxy(app, server)
     install_jwt_auth(app, server)
     install_setup_lockdown(app, server)
+    # Outermost on purpose: loop stalls must be attributed to the full request
+    # lifetime, including the auth checks that run before the route does.
+    install_loop_lag(app, server)
 
     if server.app_runtime is not None and server.app_runtime.bridge_manager is not None:
         from octop.api.bridge_peer import prepare_peer_dashboard_turn

@@ -159,6 +159,11 @@ async def run_foreground(
             await memory_control.close()
             await _cancel_background_task(bwrap_task)
             await srv.stop()
+            from octop.api.middleware.loop_lag import stop_watchdog
+            from octop.infra.utils.offload import shutdown_pools
+
+            stop_watchdog()
+            shutdown_pools()
 
 
 def run_foreground_blocking(**kwargs: Any) -> None:
