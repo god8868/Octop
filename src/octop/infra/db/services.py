@@ -34,6 +34,7 @@ from octop.infra.db.repos.sessions import SessionRepo
 from octop.infra.db.repos.settings import SettingsRepo
 from octop.infra.db.repos.skill_packages import SkillPackageRepo
 from octop.infra.db.repos.sso import SsoRepo
+from octop.infra.db.repos.team_jobs import TeamJobsRepo
 from octop.infra.db.repos.thread_messages import ThreadMessageRepo
 from octop.infra.db.repos.threads import ThreadRepo
 from octop.infra.db.repos.trajectory_events import TrajectoryEventRepo
@@ -87,6 +88,7 @@ class RepoBundle:
     auth_challenge_repo: AuthChallengeRepo
     profile_avatar_repo: ProfileAvatarRepo
     control_file_repo: ControlFileRepo
+    team_jobs_repo: TeamJobsRepo
 
     @classmethod
     def from_pool(cls, db: DatabasePool) -> RepoBundle:
@@ -127,6 +129,7 @@ class RepoBundle:
             auth_challenge_repo=AuthChallengeRepo(db),
             profile_avatar_repo=ProfileAvatarRepo(db),
             control_file_repo=ControlFileRepo(db),
+            team_jobs_repo=TeamJobsRepo(db),
         )
 
 

@@ -1455,6 +1455,39 @@ def _ensure_agent_teams_schema(db: DatabasePool) -> None:
     _ensure_column(db, "agents", "kind", "TEXT NOT NULL DEFAULT 'expert'")
 
 
+def _ensure_team_jobs_schema(db: DatabasePool) -> None:
+    """Create ``team_jobs`` and retire rows a previous process left active.
+
+    The table is an audit trail, not lock state — in-process memory still decides
+    whether a member is busy. Anything still ``active`` at startup belongs to a
+    process that is gone and whose real outcome is unknown; re-running a member
+    turn could replay its side effects (file writes, messages). Marking those
+    rows orphaned keeps the history honest and leaves something to clean up.
+
+    With ``--workers N`` each worker runs this, so a job another worker started
+    moments ago may be retired here too. That is acceptable only because nothing
+    reads the column back as lock state.
+    """
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS team_jobs (
+              job_id           TEXT PRIMARY KEY,
+              team_agent_id    TEXT NOT NULL,
+              member_agent_id  TEXT NOT NULL,
+              status           TEXT NOT NULL,
+              created_at       BIGINT NOT NULL,
+              finished_at      BIGINT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_team_jobs_status ON team_jobs (status)")
+        conn.execute(
+            "UPDATE team_jobs SET status = 'orphaned', finished_at = ? WHERE status = 'active'",
+            (int(time.time()),),
+        )
+
+
 def _ensure_user_policy_schema(db: DatabasePool) -> None:
     if not _table_exists(db, "users"):
         return
@@ -2466,6 +2499,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_connectors_v13_schema(db)
     _ensure_user_policy_schema(db)
     _ensure_agent_teams_schema(db)
+    _ensure_team_jobs_schema(db)
     _ensure_thread_conversation_mode_schema(db)
     _ensure_agent_profile_columns(db)
     _ensure_sso_provider_kind_schema(db)

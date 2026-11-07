@@ -535,7 +535,7 @@ class AgentManager:
         self._hitl_session_store: HitlSessionPolicyStore | None = None
         from octop.infra.agents.teams import TeamJobTracker, TeamService
 
-        self._team_jobs = TeamJobTracker()
+        self._team_jobs = TeamJobTracker(repos.team_jobs_repo)
         self._teams = TeamService(
             repos,
             self._team_jobs,
