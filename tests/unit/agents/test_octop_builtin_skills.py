@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -256,3 +257,33 @@ print(json.dumps({"installed": slug}))
     args = json.loads(log_path.read_text(encoding="utf-8"))
     assert args[args.index("install") + 1] == "dev-expert"
     assert args[args.index("--namespace") + 1] == "user_741dc82b"
+
+
+class _EmptyPackageRoot:
+    """Stand-in for a wheel that dropped the SKILL.md files."""
+
+    def iterdir(self):
+        return iter(())
+
+
+@pytest.mark.asyncio
+async def test_warns_when_package_ships_no_builtin_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A build that loses the packaged skills must not fail silently."""
+    from octop.infra.agents import builtin_skills as module
+
+    agent = FakeHarnessAgent(workspace_dir=tmp_path, virtual_mode=False)
+    monkeypatch.setattr(module.resources, "files", lambda _pkg: _EmptyPackageRoot())
+    monkeypatch.setattr(
+        "octop.infra.gateway.media.inbound_store.agent_facing_workspace_path",
+        lambda _ws, rel: f"/ws/{rel}",
+    )
+
+    with caplog.at_level(logging.WARNING, logger=module.__name__):
+        synced = await sync_octop_builtin_skills(agent.workspace)
+
+    assert synced == []
+    assert "no built-in skills" in caplog.text

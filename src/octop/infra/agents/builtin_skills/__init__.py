@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from importlib import resources
 from importlib.resources.abc import Traversable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 OCTOP_BUILTIN_SKILLS_ROOT = "_builtin_skills"
 RETIRED_BUILTIN_SKILLS = ("install-skill",)
@@ -55,6 +58,15 @@ async def sync_octop_builtin_skills(workspace: Any) -> list[str]:
             continue
         skill_names.append(entry.name)
         _collect_files(entry, f"{OCTOP_BUILTIN_SKILLS_ROOT}/{entry.name}", uploads)
+
+    if not skill_names:
+        # The package always carries skills; an empty scan means the build
+        # dropped them (wheel include list, zipapp rewrite). The agent would
+        # otherwise just lose its built-ins with no signal anywhere.
+        logger.warning(
+            "no built-in skills found in package %s; agent workspaces will have none",
+            _PACKAGE,
+        )
 
     # Render the agent-facing workspace path into the instructions (not the
     # host ``root_dir`` join that ``resolve_path`` returns for I/O).
