@@ -72,6 +72,9 @@ logger = logging.getLogger(__name__)
 
 _ROOM_HISTORY_LIMIT = 40
 _HOST_IDLE_POLL_SEC = 0.05
+# Back off to this cap while the host is still streaming. Short waits keep the
+# 50ms first probe, long waits stop waking the loop ~8x more often than needed.
+_HOST_IDLE_POLL_MAX_SEC = 0.4
 _HOST_IDLE_WAIT_SEC = 45.0
 _MEMBER_HITL_WAIT_SEC = 30 * 60
 _RELAY_CHUNK_TYPES = frozenset(
@@ -582,12 +585,18 @@ class TeamManager:
         """Wait until the host turn is idle.
 
         Returns False when the wait expires and the host is still streaming.
+
+        Polling backs off from ``_HOST_IDLE_POLL_SEC`` to
+        ``_HOST_IDLE_POLL_MAX_SEC`` so a long host turn does not wake the event
+        loop hundreds of times, while a short turn is still detected promptly.
         """
-        deadline = asyncio.get_running_loop().time() + _HOST_IDLE_WAIT_SEC
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _HOST_IDLE_WAIT_SEC
+        delay = _HOST_IDLE_POLL_SEC
         while True:
             if not self._host_turn_busy(host_id, room_thread_id):
                 return True
-            if asyncio.get_running_loop().time() >= deadline:
+            if loop.time() >= deadline:
                 logger.warning(
                     "team room waited %.0fs for host idle host=%s room=%s",
                     _HOST_IDLE_WAIT_SEC,
@@ -595,7 +604,8 @@ class TeamManager:
                     room_thread_id,
                 )
                 return False
-            await asyncio.sleep(_HOST_IDLE_POLL_SEC)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _HOST_IDLE_POLL_MAX_SEC)
 
     async def stream_host_followup_to_room(
         self,
