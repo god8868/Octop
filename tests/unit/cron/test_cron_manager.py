@@ -6,6 +6,8 @@ real async tasks or LLM calls are made.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -767,6 +769,82 @@ async def test_run_now_fires_job(tmp_path: Path) -> None:
         mock_ef.assert_called_once()
         coro = mock_ef.call_args[0][0]
         coro.close()  # clean up without awaiting
+
+
+@pytest.mark.asyncio
+async def test_run_now_retains_background_task_until_done(tmp_path: Path) -> None:
+    """Fire-and-forget runs stay referenced so a pending task is not collected."""
+    services = _make_services(tmp_path)
+    aid, uid = _make_agent(services)
+    mgr = _make_manager(services)
+    cid = _cron_id()
+    await mgr.create(
+        cron_id=cid,
+        agent_id=aid,
+        user_id=uid,
+        trigger="interval:3600",
+        prompt="run",
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking(
+        _cron_id: str,
+        *,
+        raise_on_error: bool = False,
+        force: bool = False,
+    ) -> None:
+        started.set()
+        await release.wait()
+
+    mgr._run_user_job = _blocking  # type: ignore[method-assign]
+
+    await mgr.run_now(cid)
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert len(mgr._background_tasks) == 1
+
+    release.set()
+    task = next(iter(mgr._background_tasks))
+    await asyncio.wait_for(task, timeout=5)
+    await asyncio.sleep(0)  # let the done callback run
+    assert mgr._background_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_run_now_logs_background_failure(tmp_path: Path, caplog) -> None:
+    """A failing fire-and-forget run must reach the log, not vanish silently."""
+    services = _make_services(tmp_path)
+    aid, uid = _make_agent(services)
+    mgr = _make_manager(services)
+    cid = _cron_id()
+    await mgr.create(
+        cron_id=cid,
+        agent_id=aid,
+        user_id=uid,
+        trigger="interval:3600",
+        prompt="run",
+    )
+
+    async def _boom(
+        _cron_id: str,
+        *,
+        raise_on_error: bool = False,
+        force: bool = False,
+    ) -> None:
+        raise RuntimeError("delivery exploded")
+
+    mgr._run_user_job = _boom  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR, logger="octop.infra.cron.manager"):
+        await mgr.run_now(cid)
+        task = next(iter(mgr._background_tasks))
+        with pytest.raises(RuntimeError):
+            await task
+        await asyncio.sleep(0)  # let the done callback run
+
+    assert any("background run failed" in record.message for record in caplog.records)
+    assert mgr._background_tasks == set()
 
 
 # ---------------------------------------------------------------------------

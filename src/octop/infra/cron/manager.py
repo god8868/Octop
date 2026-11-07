@@ -92,6 +92,9 @@ class CronManager:
         self._system_job_ids: set[str] = set()
         self._scheduled_spec: dict[str, str] = {}
         self._reconcile_task: asyncio.Task[None] | None = None
+        # Fire-and-forget runs (run_now without wait) — retained so they are not
+        # garbage collected mid-flight and so failures surface in the log.
+        self._background_tasks: set[asyncio.Future[None]] = set()
         self._serve_background = True
 
     def replace_repos(self, repos: RepoBundle) -> None:
@@ -339,7 +342,18 @@ class CronManager:
         if wait:
             await self._run_user_job(cron_id, raise_on_error=True, force=True)
         else:
-            asyncio.ensure_future(self._run_user_job(cron_id, force=True))
+            task = asyncio.ensure_future(self._run_user_job(cron_id, force=True))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._on_background_done)
+
+    def _on_background_done(self, task: asyncio.Future[None]) -> None:
+        """Release a fire-and-forget run and surface its failure."""
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("CronJob background run failed: %s", exc, exc_info=exc)
 
     async def _run_user_job(
         self,
