@@ -330,8 +330,14 @@ class ProactiveCareScheduler:
             self.ensure_scheduled(cfg.agent_id)
 
     def suspend(self) -> None:
-        """Stop creating new loops. Tests call this so leftover sleeps do not hang pytest."""
+        """Stop creating new loops and cancel the ones already running.
+
+        Used by tests and shutdown paths so a loop sleeping for hours cannot
+        outlive the caller.
+        """
         self._suspended = True
+        for agent_id in list(self._tasks):
+            self.cancel(agent_id)
 
     def ensure_scheduled(self, agent_id: str) -> None:
         """Start the loop if this agent is enabled and not already scheduled."""
@@ -350,20 +356,29 @@ class ProactiveCareScheduler:
     def reschedule(self, agent_id: str) -> None:
         """Cancel the current schedule and re-arrange the next trigger time with new config.
 
-        Usually called after the user updates the configuration.
+        Usually called after the user updates the configuration. The replacement
+        starts only after the superseded loop has actually exited: a loop whose
+        wait already elapsed would otherwise get a chance to push another care
+        message alongside the new one.
 
         Args:
             agent_id: The agent ID to reschedule.
         """
-        self.cancel(agent_id)
+        superseded = self._tasks.pop(agent_id, None)
         cfg = self._config_repo.get(agent_id)
-        if cfg.enabled:
-            self._schedule(agent_id)
-            logger.info("ProactiveCareScheduler: agent=%s rescheduled (enabled=true)", agent_id)
-        else:
+        if not cfg.enabled:
+            if superseded is not None and not superseded.done():
+                superseded.cancel()
             logger.info(
                 "ProactiveCareScheduler: agent=%s schedule cancelled (enabled=false)", agent_id
             )
+            return
+        if superseded is not None and not superseded.done():
+            superseded.cancel()
+            superseded.add_done_callback(lambda _task: self._schedule(agent_id))
+        else:
+            self._schedule(agent_id)
+        logger.info("ProactiveCareScheduler: agent=%s rescheduled (enabled=true)", agent_id)
 
     def cancel(self, agent_id: str) -> None:
         """Cancel an agent's scheduling task.

@@ -594,3 +594,87 @@ async def test_suspend_skips_new_schedules(
     scheduler.ensure_scheduled(agent_id)
     await scheduler.start_all()
     assert scheduler._tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_suspend_cancels_inflight_loops(
+    agent_id: str,
+    config_repo: ProactiveCareConfigRepo,
+    db: SqlitePool,
+) -> None:
+    """suspend() must stop a running loop, not only refuse new schedules."""
+    from octop.infra.db.repos.sessions import SessionRepo
+
+    config_repo.upsert(ProactiveCareConfig(agent_id=agent_id, enabled=True))
+    scheduler = ProactiveCareScheduler(
+        care_service=AsyncMock(),
+        config_repo=config_repo,
+        session_repo=SessionRepo(db),
+    )
+    scheduler.ensure_scheduled(agent_id)
+    task = scheduler._tasks[agent_id]
+    assert not task.done()
+
+    scheduler.suspend()
+    await asyncio.sleep(0.05)
+
+    assert scheduler._tasks == {}
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_holds_slot_until_old_loop_exits(
+    agent_id: str,
+    config_repo: ProactiveCareConfigRepo,
+    db: SqlitePool,
+) -> None:
+    """A superseded loop must not run alongside its replacement."""
+    from octop.infra.db.repos.sessions import SessionRepo
+
+    config_repo.upsert(ProactiveCareConfig(agent_id=agent_id, enabled=True))
+    scheduler = ProactiveCareScheduler(
+        care_service=AsyncMock(),
+        config_repo=config_repo,
+        session_repo=SessionRepo(db),
+    )
+    scheduler.ensure_scheduled(agent_id)
+    old_task = scheduler._tasks[agent_id]
+
+    scheduler.reschedule(agent_id)
+    # The slot stays empty until the old loop acknowledges the cancellation.
+    assert agent_id not in scheduler._tasks
+
+    await asyncio.sleep(0.05)
+    new_task = scheduler._tasks.get(agent_id)
+    assert new_task is not None
+    assert new_task is not old_task
+    assert old_task.cancelled()
+
+    scheduler.cancel(agent_id)
+    await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_reschedule_when_disabled_cancels_without_replacing(
+    agent_id: str,
+    config_repo: ProactiveCareConfigRepo,
+    db: SqlitePool,
+) -> None:
+    """Disabling must leave no task behind, before or after callbacks run."""
+    from octop.infra.db.repos.sessions import SessionRepo
+
+    config_repo.upsert(ProactiveCareConfig(agent_id=agent_id, enabled=True))
+    scheduler = ProactiveCareScheduler(
+        care_service=AsyncMock(),
+        config_repo=config_repo,
+        session_repo=SessionRepo(db),
+    )
+    scheduler.ensure_scheduled(agent_id)
+    old_task = scheduler._tasks[agent_id]
+
+    config_repo.upsert(ProactiveCareConfig(agent_id=agent_id, enabled=False))
+    scheduler.reschedule(agent_id)
+    await asyncio.sleep(0.05)
+
+    assert agent_id not in scheduler._tasks
+    assert old_task.cancelled()
