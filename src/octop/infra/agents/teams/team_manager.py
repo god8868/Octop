@@ -71,6 +71,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _ROOM_HISTORY_LIMIT = 40
+# Bookkeeping keyed by a turn that may never finish (aborted dispatch, cancelled
+# stream). Bounding it keeps a long-lived process from growing without limit;
+# 512 concurrent rooms/turns is already far past any real deployment.
+_PEER_PROMPT_MAX = 512
+_LIVE_HOST_REPLY_MAX = 512
 _HOST_IDLE_POLL_SEC = 0.05
 # Back off to this cap while the host is still streaming. Short waits keep the
 # 50ms first probe, long waits stop waking the loop ~8x more often than needed.
@@ -154,7 +159,12 @@ class TeamManager:
         self._hitl = hitl_coordinator
         self._hitl_waiters: dict[str, asyncio.Future[list[dict[str, Any]]]] = {}
         self._peer_prompts: dict[tuple[str, str], tuple[str, str]] = {}
-        self._live_host_replies: set[str] = set()
+        # Insertion order for eviction: a stash whose turn never started would
+        # otherwise live for the whole process lifetime.
+        self._peer_prompt_seq: dict[tuple[str, str], int] = {}
+        self._peer_prompt_counter = 0
+        self._live_host_replies: dict[str, int] = {}
+        self._live_host_reply_counter = 0
         # Room text a member has already pushed and not yet persisted.
         # A refresh mid-answer has no history row; the new subscriber gets this.
         self._live_member_text: dict[str, dict[str, str]] = {}
@@ -656,7 +666,10 @@ class TeamManager:
         # room. Mark the reply handled once it has been persisted, otherwise
         # the fallback path appends the same wrap-up a second time.
         if room_thread_id and text:
-            self._live_host_replies.add(room_thread_id)
+            self._live_host_reply_counter += 1
+            self._live_host_replies[room_thread_id] = self._live_host_reply_counter
+            if len(self._live_host_replies) > _LIVE_HOST_REPLY_MAX:
+                self._evict_oldest_live_replies()
         return result
 
     async def fan_in_peer_turn(
@@ -669,6 +682,13 @@ class TeamManager:
         """Persist the member's tool trail + final bubble on the caller's room thread."""
         if not self._is_group_dispatch(call):
             return
+        # The member turn consumes its stash; anything still here belongs to a
+        # dispatch that never started, so release it with the turn itself.
+        if call.source_thread_id:
+            self.discard_peer_prompt(
+                call.to_agent_id,
+                derive_peer_thread_id(call.source_thread_id, call.to_agent_id),
+            )
         speaker = call.to_agent_id
         stamped = [_with_speaker(msg, speaker) for msg in _room_peer_messages(visible)]
         if not stamped:
@@ -728,12 +748,42 @@ class TeamManager:
         dispatch = dispatch.strip()
         if not question and not dispatch:
             return
-        self._peer_prompts[(agent_id, thread_id)] = (question, dispatch)
+        key = (agent_id, thread_id)
+        self._peer_prompt_counter += 1
+        self._peer_prompts[key] = (question, dispatch)
+        self._peer_prompt_seq[key] = self._peer_prompt_counter
+        if len(self._peer_prompts) > _PEER_PROMPT_MAX:
+            self._evict_oldest_peer_prompts()
+
+    def _evict_oldest_peer_prompts(self) -> None:
+        """Drop the oldest stashes until the map is back within its bound.
+
+        An entry only survives this long when its member turn never started, so
+        the prompt is already lost; evicting it frees the memory without
+        changing any live turn.
+        """
+        overflow = len(self._peer_prompts) - _PEER_PROMPT_MAX
+        if overflow <= 0:
+            return
+        oldest = sorted(self._peer_prompt_seq.items(), key=lambda item: item[1])[:overflow]
+        for key, _ in oldest:
+            self._peer_prompts.pop(key, None)
+            self._peer_prompt_seq.pop(key, None)
+
+    def discard_peer_prompt(self, agent_id: str, thread_id: str | None) -> None:
+        """Forget a stashed prompt whose turn will not consume it."""
+        if not thread_id:
+            return
+        key = (agent_id, thread_id)
+        self._peer_prompts.pop(key, None)
+        self._peer_prompt_seq.pop(key, None)
 
     def take_peer_prompt(self, agent_id: str, thread_id: str | None) -> tuple[str, str] | None:
         if not thread_id:
             return None
-        return self._peer_prompts.pop((agent_id, thread_id), None)
+        key = (agent_id, thread_id)
+        self._peer_prompt_seq.pop(key, None)
+        return self._peer_prompts.pop(key, None)
 
     take_team_peer_prompt = take_peer_prompt
     stream_team_peer_to_room = stream_peer_to_room
@@ -1315,8 +1365,17 @@ class TeamManager:
         tid = str(thread_id or "").strip()
         if not tid or tid not in self._live_host_replies:
             return False
-        self._live_host_replies.discard(tid)
+        self._live_host_replies.pop(tid, None)
         return True
+
+    def _evict_oldest_live_replies(self) -> None:
+        """Keep the marker map bounded when a room's reply event never arrives."""
+        overflow = len(self._live_host_replies) - _LIVE_HOST_REPLY_MAX
+        if overflow <= 0:
+            return
+        oldest = sorted(self._live_host_replies.items(), key=lambda item: item[1])[:overflow]
+        for thread_id, _ in oldest:
+            self._live_host_replies.pop(thread_id, None)
 
     def _persist_room_assistant(
         self,
