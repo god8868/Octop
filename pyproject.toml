@@ -21,7 +21,10 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "argon2-cffi>=23.1",
     "pyjwt>=2.8",
-    "octop-harness[all]>=1.0.8",
+    # Upper bound on purpose: the runtime patches far too many private
+    # octop_harness symbols for a major bump to be a safe automatic upgrade.
+    # Raise it only after the full test suite has been run against the new major.
+    "octop-harness[all]>=1.0.8,<2",
     "octop-memory>=1.0.3",
     "lark-oapi>=1.7.3",
     "octop-gateway>=1.0.3",
