@@ -33,5 +33,15 @@ def delete_document_file(kb_id: str, doc_id: str, filename: str) -> None:
     document_path(kb_id, doc_id, filename).unlink(missing_ok=True)
 
 
-def delete_knowledge_base_files(kb_id: str) -> None:
-    shutil.rmtree(knowledge_base_dir(kb_id), ignore_errors=True)
+def delete_knowledge_base_files(kb_id: str, *, ignore_errors: bool = True) -> None:
+    """Remove a knowledge base's local directory.
+
+    A base created before its first upload has no directory yet, so a missing
+    path is never an error. ``ignore_errors=False`` lets callers that are about
+    to drop the metadata row surface permission or file-lock failures instead of
+    leaving an orphan directory behind.
+    """
+    target = knowledge_base_dir(kb_id)
+    if not target.exists():
+        return
+    shutil.rmtree(target, ignore_errors=ignore_errors)

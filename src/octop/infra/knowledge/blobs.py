@@ -93,8 +93,8 @@ class KnowledgeBlobs:
         if backend is not None:
             backend.delete_object(self._key(kb_id, doc_id, filename))
 
-    def delete_base(self, kb_id: str) -> None:
+    def delete_base(self, kb_id: str, *, ignore_errors: bool = True) -> None:
         backend = self._backend
         if backend is not None:
             backend.delete_prefix(f"/{kb_id}")
-        delete_knowledge_base_files(kb_id)
+        delete_knowledge_base_files(kb_id, ignore_errors=ignore_errors)

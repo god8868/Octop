@@ -5,6 +5,7 @@ Visibility is owner or instance-wide ``shared``.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,8 @@ from octop.infra.knowledge.ocr import (
 from octop.infra.knowledge.parse import parse_document
 from octop.infra.knowledge.plane import open_knowledge_index, postgres_database
 from octop.infra.knowledge.relpath import normalize_kb_path, path_basename, path_parent
+
+logger = logging.getLogger(__name__)
 
 MAX_DOCS_PER_KB = 100
 MAX_BASES_PER_OWNER = 20
@@ -486,13 +489,21 @@ class KnowledgeService:
             from octop.infra.knowledge.pg_index import PgVectorKnowledgeIndex
 
             PgVectorKnowledgeIndex(kb_id, database).delete_kb()
-        self._repo.delete_base(kb_id)
+        # Files first, metadata last: the metadata row is the existence anchor,
+        # so a file-side failure stays retryable instead of leaving an orphan
+        # directory that nothing can reach any more.
+        self._blobs().delete_base(kb_id, ignore_errors=False)
         from octop.infra.users.groups import RESOURCE_KNOWLEDGE_BASE, GroupAccess
 
-        repos = getattr(self._services, "repos", None)
-        if repos is not None:
-            GroupAccess(repos).clear(RESOURCE_KNOWLEDGE_BASE, kb_id)
-        self._blobs().delete_base(kb_id)
+        try:
+            repos = getattr(self._services, "repos", None)
+            if repos is not None:
+                GroupAccess(repos).clear(RESOURCE_KNOWLEDGE_BASE, kb_id)
+        except Exception:
+            # A failed ACL reset must not block the removal itself; the grant
+            # rows are keyed by the base id and die with it either way.
+            logger.warning("knowledge base %s group access cleanup failed", kb_id, exc_info=True)
+        self._repo.delete_base(kb_id)
 
     def _blobs(self) -> KnowledgeBlobs:
         return KnowledgeBlobs.from_services(self._services)
