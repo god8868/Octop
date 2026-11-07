@@ -17,6 +17,7 @@ from octop.infra.backend.resolver import (
     _is_host_root,
     backend_spec_supports_execution,
     default_agent_backend_spec,
+    resolve_agent_backend_spec,
     windows_neutralize_host_root,
 )
 
@@ -179,3 +180,130 @@ def test_windows_neutralize_composite_healthy_default_kept(tmp_path: Path) -> No
     with patch("octop.infra.backend.resolver.os", SimpleNamespace(name="nt")):
         out = windows_neutralize_host_root(spec, workspace_dir=tmp_path)
     assert out == spec
+
+
+# ---------------------------------------------------------------------------
+# resolve_agent_backend_spec — named refs, cycles, nesting depth
+# ---------------------------------------------------------------------------
+
+
+def _fake_repo(specs: dict[str, Any]) -> Any:
+    """Repo stub: ``get_by_name`` returns a marker keyed by the stored spec map."""
+    return SimpleNamespace(get_by_name=lambda name: name if name in specs else None)
+
+
+def _patch_rows(monkeypatch: pytest.MonkeyPatch, specs: dict[str, Any]) -> None:
+    """Replace the row→spec adapter so tests describe backends as plain dicts."""
+    monkeypatch.setattr(
+        "octop.infra.backend.resolver.row_to_backend_spec",
+        lambda row: specs.get(row),
+    )
+
+
+def _resolve(spec: Any, specs: dict[str, Any]) -> Any:
+    return resolve_agent_backend_spec(spec, repo=_fake_repo(specs))
+
+
+def test_resolve_self_reference_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs: dict[str, Any] = {"A": {"type": "named", "name": "A"}}
+    _patch_rows(monkeypatch, specs)
+
+    with pytest.raises(ValueError, match="cycle"):
+        _resolve({"type": "named", "name": "A"}, specs)
+
+
+def test_resolve_two_node_cycle_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs: dict[str, Any] = {
+        "A": {"type": "named", "name": "B"},
+        "B": {"type": "named", "name": "A"},
+    }
+    _patch_rows(monkeypatch, specs)
+
+    with pytest.raises(ValueError, match="A -> B -> A"):
+        _resolve({"type": "named", "name": "A"}, specs)
+
+
+def test_resolve_three_node_cycle_raises_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs: dict[str, Any] = {
+        "A": {"type": "named", "name": "B"},
+        "B": {"type": "named", "name": "C"},
+        "C": {"type": "named", "name": "A"},
+    }
+    _patch_rows(monkeypatch, specs)
+
+    with pytest.raises(ValueError, match="A -> B -> C -> A"):
+        _resolve({"type": "named", "name": "A"}, specs)
+
+
+def test_resolve_diamond_reference_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two branches reaching the same backend is legal; only cycles are not."""
+    specs: dict[str, Any] = {
+        "A": {
+            "type": "composite",
+            "default": {"type": "named", "name": "B"},
+            "routes": {"/c/": {"type": "named", "name": "C"}},
+        },
+        "B": {"type": "composite", "default": {"type": "named", "name": "D"}, "routes": {}},
+        "C": {"type": "composite", "default": {"type": "named", "name": "D"}, "routes": {}},
+        "D": {"type": "local_shell", "root_dir": "/shared", "virtual_mode": True},
+    }
+    _patch_rows(monkeypatch, specs)
+
+    resolved = _resolve({"type": "named", "name": "A"}, specs)
+    assert resolved["default"]["default"]["root_dir"] == "/shared"
+    assert resolved["routes"]["/c/"]["default"]["root_dir"] == "/shared"
+
+
+def test_resolve_composite_route_cycle_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs: dict[str, Any] = {
+        "A": {
+            "type": "composite",
+            "default": {"type": "local_shell", "root_dir": "/", "virtual_mode": True},
+            "routes": {"/loop/": {"type": "named", "name": "A"}},
+        },
+    }
+    _patch_rows(monkeypatch, specs)
+
+    with pytest.raises(ValueError, match="cycle"):
+        _resolve({"type": "named", "name": "A"}, specs)
+
+
+def test_resolve_named_chain_within_depth_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs: dict[str, Any] = {
+        "A": {"type": "named", "name": "B"},
+        "B": {"type": "named", "name": "C"},
+        "C": {"type": "named", "name": "D"},
+        "D": {"type": "named", "name": "E"},
+        "E": {"type": "local_shell", "root_dir": "/end", "virtual_mode": True},
+    }
+    _patch_rows(monkeypatch, specs)
+
+    assert _resolve({"type": "named", "name": "A"}, specs)["root_dir"] == "/end"
+
+
+def test_resolve_nesting_over_depth_limit_raises() -> None:
+    spec: Any = {"type": "local_shell", "root_dir": "/leaf", "virtual_mode": True}
+    for _ in range(18):
+        spec = {"type": "composite", "default": spec, "routes": {}}
+
+    with pytest.raises(ValueError, match="nesting exceeds"):
+        resolve_agent_backend_spec(spec, repo=None)
+
+
+def test_resolve_plain_spec_is_returned_clean() -> None:
+    """Non-named specs keep their fields but drop a stray ``name``."""
+    assert resolve_agent_backend_spec(
+        {"type": "local_shell", "root_dir": "/x", "name": "stale"}, repo=None
+    ) == {"type": "local_shell", "root_dir": "/x"}

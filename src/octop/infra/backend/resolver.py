@@ -76,29 +76,66 @@ def _is_host_root(root: Any) -> bool:
     return root is not None and str(root).strip() in ("/", "\\", "")
 
 
+# Each named ref costs one DB lookup per level, so 16 already exceeds any sane
+# configuration. The limit is a backstop for hand-built route trees; it does not
+# replace cycle detection.
+_MAX_BACKEND_RESOLVE_DEPTH = 16
+
+
 def resolve_agent_backend_spec(
     spec: Any,
     *,
     repo: Any | None,
 ) -> Any:
-    """Expand ``named`` refs (and composite trees) into harness-ready specs."""
+    """Expand ``named`` refs (and composite trees) into harness-ready specs.
+
+    Raises:
+        ValueError: On an unknown or incomplete named backend, a reference
+            cycle, or nesting deeper than ``_MAX_BACKEND_RESOLVE_DEPTH``.
+    """
+    return _resolve_backend_spec(spec, repo=repo, seen=(), depth=0)
+
+
+def _resolve_backend_spec(
+    spec: Any,
+    *,
+    repo: Any | None,
+    seen: tuple[str, ...],
+    depth: int,
+) -> Any:
+    """Recursive worker for :func:`resolve_agent_backend_spec`.
+
+    ``seen`` is the chain of storage-backend names on the *current* stack, not
+    a global visited set: a diamond (two routes sharing one backend) must stay
+    legal, only a genuine cycle is rejected.
+    """
     if spec is None:
         return None
     if not isinstance(spec, dict):
         return spec
+    if depth > _MAX_BACKEND_RESOLVE_DEPTH:
+        trail = " -> ".join(seen) if seen else "(inline)"
+        raise ValueError(
+            f"backend spec nesting exceeds {_MAX_BACKEND_RESOLVE_DEPTH} levels: {trail}"
+        )
 
     kind = spec.get("type")
     if kind == "named":
         name = spec.get("name")
         if not repo or not name:
             raise ValueError("named backend requires a configured storage backend name")
-        row = repo.get_by_name(str(name))
+        name = str(name)
+        if name in seen:
+            raise ValueError(
+                "storage backend reference cycle detected: " + " -> ".join((*seen, name))
+            )
+        row = repo.get_by_name(name)
         if row is None:
             raise ValueError(f"storage backend {name!r} not found")
         inner = row_to_backend_spec(row)
         if inner is None:
             raise ValueError(f"storage backend {name!r} is incomplete")
-        return resolve_agent_backend_spec(inner, repo=repo)
+        return _resolve_backend_spec(inner, repo=repo, seen=(*seen, name), depth=depth + 1)
 
     if kind == "composite":
         default = spec.get("default")
@@ -109,9 +146,9 @@ def resolve_agent_backend_spec(
             raise ValueError("composite backend routes must be a dict")
         return {
             "type": "composite",
-            "default": resolve_agent_backend_spec(default, repo=repo),
+            "default": _resolve_backend_spec(default, repo=repo, seen=seen, depth=depth + 1),
             "routes": {
-                str(prefix): resolve_agent_backend_spec(sub, repo=repo)
+                str(prefix): _resolve_backend_spec(sub, repo=repo, seen=seen, depth=depth + 1)
                 for prefix, sub in routes.items()
             },
         }
