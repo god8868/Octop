@@ -51,6 +51,7 @@ from octop.infra.control.mobile.setup import mobile_status
 from octop.infra.users.identity import User
 from octop.infra.users.permissions import user_has_permission
 from octop.infra.utils.locale import resolve_request_locale
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -167,18 +168,18 @@ async def _stream_frames(
         loop = asyncio.get_running_loop()
         t0 = loop.time()
         try:
-            captured = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    partial(
-                        capture_jpeg_frame,
-                        device,
-                        quality=quality,
-                        max_side=max_side,
-                        adb=adb,
-                    ),
-                ),
-                timeout=_CAPTURE_TIMEOUT_S,
+            # Bounded inside (``screencap_rgba`` passes timeout=8 to the child),
+            # so it belongs on the IO pool with the other interactive adb work,
+            # not on the narrow pool reserved for unbounded installers.
+            captured = await run_blocking(
+                capture_jpeg_frame,
+                device,
+                quality=quality,
+                max_side=max_side,
+                adb=adb,
+                pool=Pool.IO,
+                wait_timeout=_CAPTURE_TIMEOUT_S,
+                label="capture_jpeg_frame",
             )
         except TimeoutError:
             captured = None
@@ -320,11 +321,12 @@ async def _run_adb_action(
     action: str,
     fn: Any,
 ) -> None:
-    loop = asyncio.get_running_loop()
     try:
-        ok = await asyncio.wait_for(
-            loop.run_in_executor(None, fn),
-            timeout=_INPUT_TIMEOUT_S,
+        ok = await run_blocking(
+            fn,
+            pool=Pool.IO,
+            wait_timeout=_INPUT_TIMEOUT_S,
+            label=f"adb_action:{action}",
         )
     except TimeoutError:
         ok = False
@@ -332,11 +334,14 @@ async def _run_adb_action(
 
 
 async def _run_adb_rotation(ws: WebSocket, *, device: str, adb: str | None) -> None:
-    loop = asyncio.get_running_loop()
     try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, partial(toggle_portrait_landscape, device, adb=adb)),
-            timeout=_INPUT_TIMEOUT_S,
+        result = await run_blocking(
+            toggle_portrait_landscape,
+            device,
+            adb=adb,
+            pool=Pool.IO,
+            wait_timeout=_INPUT_TIMEOUT_S,
+            label="toggle_portrait_landscape",
         )
     except TimeoutError:
         await _send_json(

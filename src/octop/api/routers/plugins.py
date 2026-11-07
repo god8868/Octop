@@ -23,6 +23,7 @@ from octop.infra.agents.plugins.plugin_tool_defaults import (
 )
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
+from octop.infra.utils.offload import Pool, run_blocking
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 
@@ -251,11 +252,17 @@ async def install_market_plugin(
 ) -> dict[str, Any]:
     """Download one catalog release into ``~/.octop/plugins``."""
     mgr = _plugin_manager(server)
-    loop = asyncio.get_running_loop()
     try:
-        loaded = await loop.run_in_executor(
-            None,
-            lambda: mgr.install_from_market(plugin_id, version=version, force=force),
+        # The archive fetch is bounded (``urlopen(..., timeout=30)``) and the
+        # rest is unzip plus module load, so this is IO work, not the
+        # unbounded-installer class that owns the subprocess pool.
+        loaded = await run_blocking(
+            mgr.install_from_market,
+            plugin_id,
+            version=version,
+            force=force,
+            pool=Pool.IO,
+            label="install_from_market",
         )
     except OctopError:
         raise

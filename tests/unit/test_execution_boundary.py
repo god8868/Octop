@@ -46,7 +46,7 @@ _FORBIDDEN_IN_ASYNC = frozenset(
 )
 
 #: ``run_in_executor(None, ...)`` still present, keyed by file then function.
-#: 31 call sites across 20 files when this guard was written. Only shrinks.
+#: 23 call sites across 17 files when this guard was written. Only shrinks.
 _DEFAULT_EXECUTOR_BASELINE: dict[str, dict[str, int]] = {
     "src/octop/api/routers/auth.py": {"_authenticate_ldap": 1},
     "src/octop/api/routers/auth_ldap.py": {"test_ldap_config": 1},
@@ -57,14 +57,7 @@ _DEFAULT_EXECUTOR_BASELINE: dict[str, dict[str, int]] = {
     },
     "src/octop/api/routers/auth_oidc.py": {"oidc_start": 1, "test_oidc_config": 1},
     "src/octop/api/routers/desktop/settings.py": {"set_desktop_geometry": 1},
-    "src/octop/api/routers/mobile/shell_ws.py": {"adb_shell_ws": 3, "pump_output": 1},
-    "src/octop/api/routers/mobile/stream.py": {
-        "_run_adb_action": 1,
-        "_run_adb_rotation": 1,
-        "_stream_frames": 1,
-    },
     "src/octop/api/routers/ollama_models.py": {"_run_pull_in_background": 1},
-    "src/octop/api/routers/plugins.py": {"install_market_plugin": 1},
     "src/octop/api/routers/terminal.py": {"_destroy_session": 1},
     "src/octop/infra/agents/memory/slim.py": {"_run_postgres": 1, "inspect_storage": 1},
     "src/octop/infra/agents/providers/onnx_service.py": {

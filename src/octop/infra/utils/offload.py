@@ -36,7 +36,26 @@ logger = logging.getLogger(__name__)
 
 
 class Pool(StrEnum):
-    """Class of blocking work. Each value owns a separate thread pool."""
+    """Class of blocking work. Each value owns a separate thread pool.
+
+    The split is by *how long the call can run*, not by what it uses:
+
+    ``DB``
+        Repository calls. Split from IO only so a slow query is visible on its
+        own counter; SQLite serializes these behind one lock anyway.
+    ``IO``
+        Blocking calls that finish in milliseconds to seconds — file IO, network
+        calls that carry their own timeout, and child processes that pass an
+        explicit ``timeout`` (``adb``, ``screencap``). A hang here is a bug or a
+        bounded timeout, never a ten-minute wait.
+    ``SUBPROCESS``
+        Child work whose runtime nobody bounded: package installers and model
+        downloads. Two threads, on purpose — see the module docstring.
+
+    Putting a bounded ``adb`` call on ``SUBPROCESS`` looks tidier but shrinks
+    console and screen-mirror throughput from eight threads to two, so it is
+    the wrong trade even though both spawn a child process.
+    """
 
     DB = "db"
     IO = "io"

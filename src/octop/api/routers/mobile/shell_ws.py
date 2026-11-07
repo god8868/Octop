@@ -10,7 +10,6 @@ import logging
 import os
 import signal
 import subprocess
-from functools import partial
 from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -21,6 +20,7 @@ from octop.infra.control.mobile.adb import find_adb, list_devices
 from octop.infra.users.identity import User
 from octop.infra.users.permissions import user_has_permission
 from octop.infra.utils import posix_compat
+from octop.infra.utils.offload import Pool, run_blocking
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +111,15 @@ async def adb_shell_ws(
         with contextlib.suppress(OSError):
             os.close(slave_fd)
 
-    loop = asyncio.get_running_loop()
     closed = asyncio.Event()
 
     async def pump_output() -> None:
         while not closed.is_set():
-            chunk = await loop.run_in_executor(None, _read_nonblock, master_fd)
+            # The fd is O_NONBLOCK, so this returns in microseconds and never
+            # waits on the child. It stays off the loop for the blocking-error
+            # case (a revoked tty), and on the IO pool rather than SUBPROCESS —
+            # an installer holding the narrow pool must not stop a live console.
+            chunk = await run_blocking(_read_nonblock, master_fd, pool=Pool.IO, label="pty_read")
             if chunk is None:
                 if proc.poll() is not None:
                     break
@@ -142,16 +145,17 @@ async def adb_shell_ws(
             if t == "input":
                 data = msg.get("data")
                 if isinstance(data, str) and data:
-                    await loop.run_in_executor(
-                        None,
+                    await run_blocking(
                         _write_pty,
                         master_fd,
                         data.encode("utf-8", errors="replace"),
+                        pool=Pool.IO,
+                        label="pty_write",
                     )
             elif t == "resize":
                 c = int(msg.get("cols") or cols)
                 r = int(msg.get("rows") or rows)
-                await loop.run_in_executor(None, _set_winsize, master_fd, c, r)
+                await run_blocking(_set_winsize, master_fd, c, r, pool=Pool.IO, label="pty_resize")
     except WebSocketDisconnect:
         pass
     finally:
@@ -165,7 +169,9 @@ async def adb_shell_ws(
             with contextlib.suppress(OSError, ProcessLookupError):
                 posix_compat.killpg(posix_compat.getpgid(proc.pid), signal.SIGTERM)
             with contextlib.suppress(subprocess.TimeoutExpired):
-                await loop.run_in_executor(None, partial(proc.wait, timeout=1))
+                # ``timeout`` here belongs to ``proc.wait``; the helper's own
+                # wait limit is ``wait_timeout`` so the two cannot collide.
+                await run_blocking(proc.wait, timeout=1, pool=Pool.IO, label="pty_reap")
         code = proc.poll()
         if code is not None:
             await _send_json(websocket, {"type": "exit", "code": code})
