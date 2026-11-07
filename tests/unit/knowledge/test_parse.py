@@ -288,3 +288,40 @@ def test_parse_corrupt_pdf_raises_value_error(tmp_path: Path) -> None:
     path.write_bytes(b"%PDF-1.4 truncated garbage")
     with pytest.raises(ValueError, match="failed to read PDF"):
         parse_document(path)
+
+
+def test_read_text_utf16_with_bom_is_decoded(tmp_path: Path) -> None:
+    """UTF-16 has no chance without BOM sniffing: GB18030 decodes it as junk."""
+    path = tmp_path / "utf16.txt"
+    path.write_bytes("你好，world".encode("utf-16"))
+
+    assert parse_document(path) == "你好，world"
+
+
+def test_read_text_utf32_with_bom_is_not_mistaken_for_utf16(tmp_path: Path) -> None:
+    path = tmp_path / "utf32.txt"
+    path.write_bytes("hello".encode("utf-32"))
+
+    assert parse_document(path) == "hello"
+
+
+def test_read_text_utf8_bom_is_stripped(tmp_path: Path) -> None:
+    path = tmp_path / "bom.txt"
+    path.write_bytes("hello".encode("utf-8-sig"))
+
+    assert parse_document(path) == "hello"
+
+
+def test_read_text_gbk_still_decodes(tmp_path: Path) -> None:
+    """Regression guard: the GBK fix must survive the BOM change."""
+    path = tmp_path / "gbk.txt"
+    path.write_bytes("中文内容".encode("gb18030"))
+
+    assert parse_document(path) == "中文内容"
+
+
+def test_read_text_normalizes_crlf(tmp_path: Path) -> None:
+    path = tmp_path / "crlf.txt"
+    path.write_bytes(b"a\r\nb\rc\n")
+
+    assert parse_document(path) == "a\nb\nc\n"

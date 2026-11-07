@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import csv
 import io
 import json
@@ -94,22 +95,51 @@ def parse_document(path: Path, *, ocr: OcrExtractor | None = None) -> str:
 
 _TEXT_ENCODINGS = ("utf-8-sig", "gb18030")
 
+# Longest BOM first: a UTF-32-LE marker starts with the UTF-16-LE one, so
+# checking UTF-16 first would misdecode every UTF-32 file.
+_BOM_ENCODINGS = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def _normalize_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
 
 def _read_text(path: Path) -> str:
-    """Decode a knowledge text file, preferring UTF-8 then GB18030 (GBK).
+    """Decode a knowledge text file, honouring a BOM before guessing.
 
+    Without a BOM the candidates are UTF-8 then GB18030 (a GBK superset).
     ``errors='replace'`` on UTF-8 used to swallow GBK Windows documents as
     mojibake, so retrieval never saw the original Chinese text.
+
+    BOM sniffing comes first because a UTF-16 file has no chance otherwise: its
+    ``FF FE`` / ``FE FF`` prefix and interleaved NULs decode "successfully" as
+    GB18030, producing garbage rather than an error.
+
+    Shift-JIS, EUC-KR and Latin-1 are deliberately not candidates. GB18030
+    accepts almost any high byte pair, so anything ordered after it is
+    unreachable, and Latin-1 decodes *everything* — it would turn an unknown
+    encoding into plausible but wrong text instead of visible U+FFFD.
     """
     data = path.read_bytes()
+    for bom, encoding in _BOM_ENCODINGS:
+        if data.startswith(bom):
+            try:
+                return _normalize_newlines(data.decode(encoding))
+            except UnicodeDecodeError:  # pragma: no cover - truncated BOM
+                break
     for encoding in _TEXT_ENCODINGS:
         try:
             text = data.decode(encoding)
         except UnicodeDecodeError:
             continue
-        else:
-            return text.replace("\r\n", "\n").replace("\r", "\n")
-    return data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+        return _normalize_newlines(text)
+    return _normalize_newlines(data.decode("utf-8", errors="replace"))
 
 
 def _parse_json(path: Path) -> str:
